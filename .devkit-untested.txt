@@ -40,6 +40,8 @@ scripts/lint-all.py::python_targets
 scripts/lint-all.py::rerun_in_tree_venv
 scripts/lint-all.py::run_tool
 scripts/lint-all.py::scope_unknown
+scripts/lint-all.py::secrets_section
+scripts/lint-all.py::secrets_targets
 scripts/log-wrap.py::strip_ansi
 scripts/merge-dependabot-prs.py::blocking_checks
 scripts/merge-dependabot-prs.py::candidates

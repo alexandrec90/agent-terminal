@@ -1,0 +1,53 @@
+[project]
+name = "agent-terminal"
+version = "0.1.0"
+description = "Windows terminal with custom tab bar"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic-settings>=2.4",
+]
+
+[project.optional-dependencies]
+# Host-only toolchain. Deliberately NOT installed into the container image — it is
+# several hundred MB of tooling the runtime never imports.
+dev = [
+  "ruff>=0.15",
+  "mypy>=1.11",
+  # 9.1: it applies `pythonpath` before loading `addopts`' `-p devkit_temproot`.
+  "pytest>=9.1",
+  "pytest-cov>=5.0",
+  # Runs `.pre-commit-config.yaml` — the commit-time gate. Installed here (not globally)
+  # so the version is pinned with everything else, and so `session-start.sh` can wire the
+  # git hook right after `uv sync` without a separate bootstrap step.
+  "pre-commit>=4.6",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+# `testpaths` is what keeps `scripts/hooks/tests/` out of the application suite —
+# those are the vendored harness's own stdlib-only tests and run separately.
+testpaths = ["tests/"]
+# No `-q` in `addopts`: an agent adds its own, and `-qq` drops the "N passed" line.
+# `-p devkit_temproot` is the vendored plugin giving each run a temp root of its own, so a
+# run elsewhere on the machine cannot fail this one at exit; `pythonpath` is where it lives.
+addopts = "-p devkit_temproot"
+pythonpath = ["scripts/pytest-plugins"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+# The one note mypy prints for every untyped function it skipped, on a clean run too:
+# 162 of them, 28 KB, opened `logs/lint-errors.log` ahead of the error that failed it.
+# It says nothing a finding needs; `check_untyped_defs` is the setting, not the note.
+disable_error_code = ["annotation-unchecked"]
+# The vendored agent harness is byte-identical upstream code (devkit owns its typing,
+# and `sync-devkit.py --check` fails if this repo edits it). Type-checking it here
+# only produces errors this repo is not allowed to fix.
+exclude = '^scripts/(hooks/|sync-harness\.py)'

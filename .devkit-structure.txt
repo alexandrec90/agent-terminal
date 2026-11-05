@@ -1,0 +1,25 @@
+# Structural findings the code already had when it adopted the gate.
+#
+# Debt, not configuration. This file SHRINKS on its own: a new key fails the gate, a
+# value that grew fails the gate, and a line the code no longer earns fails it too,
+# so fixing a finding forces its line out (`structure_check.py --tighten` does that).
+# Never add or raise a line to make new code pass; fix the code. `dependency::` is one
+# exception -- adding a package is a line here, so the PR diff shows it.
+#
+# `--record --reason "..."` is the other, and it is the deliberate hole. A function far
+# past its limit cannot gain a line, so a bug whose fix belongs in one has nowhere to
+# go, and the refactor the finding asks for is a separate body of work. Recording says
+# so out loud: the reason is mandatory, counter rules (`suppressions`, `todos`,
+# `skipped_tests`, ...) are refused because those are always somebody giving up rather
+# than a unit's size, and every move is logged below with what it moved and why.
+# Module size -- `file_lines`, `imports`, `definitions` -- is advisory and never here.
+#
+# Regenerate only when adopting the gate: python scripts/hooks/structure_check.py --seed
+dependency::pyproject.toml::mypy = 1
+dependency::pyproject.toml::pre-commit = 1
+dependency::pyproject.toml::pydantic-settings = 1
+dependency::pyproject.toml::pytest = 1
+dependency::pyproject.toml::pytest-cov = 1
+dependency::pyproject.toml::ruff = 1
+suppressions::scripts/notify-wrap.py = 1
+swallowed_errors::scripts/notify.py = 1

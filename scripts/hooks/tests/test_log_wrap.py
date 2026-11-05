@@ -1,0 +1,1051 @@
+"""Tests for scripts/log-wrap.py (the task failure-artifact wrapper).
+
+Vendored, so nothing here may name a value that varies per project: every path is
+built under `tmp_path`, and the wrapper itself resolves `logs/` from the cwd rather
+than from `__file__` for the same reason.
+
+The interesting half is what the artifact does when a run *passes*. A wrapper that
+only writes on failure leaves the previous failure sitting there, and the next agent
+reads it as current -- which is the specific failure `.claude/rules/engineering.md`
+requires an empty-on-success artifact to prevent.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+from conftest import REPO_ROOT, load_module
+
+lw = load_module("scripts/log-wrap.py")
+
+
+# --- argv ---------------------------------------------------------------------
+
+
+def test_the_title_and_command_split_on_the_separator():
+    assert lw.split_argv(["Ship: Sweep", "--", "python", "scripts/sweep.py"]) == (
+        "Ship: Sweep",
+        ["python", "scripts/sweep.py"],
+    )
+
+
+def test_an_unquoted_title_is_rejoined():
+    """`notify-wrap.py` accepts a bare multi-word title; parsing it differently here
+    would be one more thing to get right at a call site that names both."""
+    title, command = lw.split_argv(["Ship:", "Sweep", "Workspace", "--", "python", "x.py"])
+    assert title == "Ship: Sweep Workspace"
+    assert command == ["python", "x.py"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["Ship: Sweep"],  # no separator
+        ["--", "python", "x.py"],  # no title
+        ["Ship: Sweep", "--"],  # no command
+    ],
+)
+def test_a_malformed_invocation_is_refused_rather_than_guessed(argv):
+    assert lw.split_argv(argv) is None
+
+
+def test_a_malformed_invocation_exits_two_without_running_anything():
+    def never(_command):
+        raise AssertionError("ran a command it could not parse")
+
+    assert lw.main(["Ship: Sweep"], run=never) == 2
+
+
+# --- naming -------------------------------------------------------------------
+
+
+def test_the_artifact_is_named_after_the_task():
+    assert lw.slug("Ship: Sweep Workspace") == "ship-sweep-workspace"
+    assert lw.slug("Test: Run pytest --changed") == "test-run-pytest-changed"
+
+
+def test_a_title_with_nothing_nameable_still_gets_a_file():
+    """An empty stem writes `logs/.log`, which is hidden on every platform that
+    matters and would be reported as "the wrapper wrote nothing"."""
+    assert lw.slug(":::") == "task"
+
+
+# --- the body -----------------------------------------------------------------
+
+
+def test_a_passing_run_writes_nothing_at_all():
+    assert lw.artifact_body("Ship: Sweep", ["python", "x.py"], 0, "lots of output") == ""
+
+
+def test_a_failing_run_carries_the_command_and_the_output():
+    body = lw.artifact_body("Ship: Sweep", ["python", "scripts/sweep.py", "--check"], 1, "boom")
+    assert "# task: Ship: Sweep" in body
+    assert "# exit: 1" in body
+    assert "python scripts/sweep.py --check" in body
+    assert "boom" in body
+
+
+def test_colour_is_stripped_from_the_file_but_not_from_the_run():
+    """The child is told to keep its colour so the live terminal stays readable; the
+    file is read by grep and by agents, and escape sequences are noise there."""
+    body = lw.artifact_body("T", ["x"], 1, "\x1b[31mFAILED\x1b[0m tests/test_a.py")
+    assert "FAILED tests/test_a.py" in body
+    assert "\x1b[" not in body
+
+
+def test_the_child_keeps_colour_unless_the_caller_decided():
+    assert lw.child_env({})["FORCE_COLOR"] == "1"
+    assert lw.child_env({"FORCE_COLOR": "0"})["FORCE_COLOR"] == "0"
+
+
+def test_the_child_writes_the_utf8_this_wrapper_reads(monkeypatch):
+    """`stream` decodes UTF-8, but a Python child writing to a pipe encodes with the
+    locale's code page -- cp1252 on Windows -- and dies on the first character outside
+    it. Every scheduled job now runs under this wrapper, so that was a working job
+    turned into a crashing one by the act of recording its failures (2026-10-03)."""
+    assert lw.child_env({})["PYTHONIOENCODING"] == "utf-8"
+    assert lw.child_env({"PYTHONIOENCODING": "cp1252"})["PYTHONIOENCODING"] == "cp1252"
+    for name in ("PYTHONIOENCODING", "PYTHONUTF8"):
+        monkeypatch.delenv(name, raising=False)
+    code, output = lw.stream([sys.executable, "-c", "print('\\u2713 done')"])
+    assert (code, output.strip()) == (0, "✓ done")
+
+
+def test_the_child_s_two_streams_arrive_in_the_order_it_wrote_them(monkeypatch):
+    """A Python child block-buffers stdout into a pipe and flushes it at exit, while
+    stderr goes out at once, so the merged output put every stdout line *after* every
+    stderr line. The cause is read from the last line: the 2026-10-06 Upgrade Projects
+    run warned on stderr that a release was owed, pointed at `logs/upgrade.log`, and was
+    filed as "social-scraper is already on devkit vN.N" -- its last stdout line (583d8e80)."""
+    assert lw.child_env({})["PYTHONUNBUFFERED"] == "1"
+    assert lw.child_env({"PYTHONUNBUFFERED": ""})["PYTHONUNBUFFERED"] == ""
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    script = "import sys; print('first'); print('second', file=sys.stderr); print('third')"
+    code, output = lw.stream([sys.executable, "-c", script])
+    assert (code, output.split()) == (0, ["first", "second", "third"])
+
+
+def test_an_unattended_child_is_told_nobody_will_answer_a_prompt():
+    """fb1f5465: every Worktree Reconcile run from 01:15 to 05:00 on 2026-10-08 was held
+    to the scheduler's one-hour kill with nothing written, so the 05:00 fire was skipped
+    as an overlap. A pass with no boxes spawns only `git fetch` and `gh`, and git asks
+    Git Credential Manager, which waits on a sign-in nobody at 3 a.m. answers."""
+    env = lw.child_env({}, unattended=True)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
+    assert env["GH_PROMPT_DISABLED"] == "1"
+    # A fetch whose connection stalls is ended rather than waited on for the hour.
+    assert int(env["GIT_HTTP_LOW_SPEED_TIME"]) > 0
+    assert int(env["GIT_HTTP_LOW_SPEED_LIMIT"]) > 0
+
+
+def test_a_clicked_child_may_still_prompt_and_a_caller_s_choice_stands():
+    """A person running a task can answer a sign-in, so only the unattended caller
+    loses the prompt -- and a value already in the environment is kept either way."""
+    assert not set(lw.UNATTENDED_ENV) & set(lw.child_env({}))
+    assert lw.child_env({"GCM_INTERACTIVE": "auto"}, unattended=True)["GCM_INTERACTIVE"] == "auto"
+
+
+def test_always_runs_the_command_with_the_unattended_environment(monkeypatch, tmp_path):
+    seen: dict[str, dict] = {}
+
+    def fake_stream(command, env=None, progress=None):
+        seen[command[0]] = env or {}
+        return 0, "ok"
+
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    monkeypatch.setattr(lw, "stream", fake_stream)
+    lw.main(["--always", "Nightly", "--", "scheduled"], root=tmp_path)
+    lw.main(["Clicked", "--", "clicked"], root=tmp_path)
+    assert seen["scheduled"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GIT_TERMINAL_PROMPT" not in seen["clicked"]
+
+
+def test_the_child_is_told_which_job_it_runs_as(monkeypatch, tmp_path):
+    """Release v0.11.58 was cut by a run that left its record on another machine, so
+    nothing here could say who started it: the child is told its label, to name in
+    what it publishes. An outer wrapper's label is overwritten -- the innermost ran it."""
+    seen: dict[str, dict] = {}
+
+    def fake_stream(command, env=None, progress=None):
+        seen[command[0]] = env or {}
+        return 0, "ok"
+
+    monkeypatch.setenv(lw.JOB_ENV, "Outer")
+    monkeypatch.setattr(lw, "stream", fake_stream)
+    lw.main(["--always", "Scheduled: Devkit Release", "--", "scheduled"], root=tmp_path)
+    lw.main(["Clicked", "--", "clicked"], root=tmp_path)
+    assert seen["scheduled"][lw.JOB_ENV] == "Scheduled: Devkit Release"
+    assert seen["clicked"][lw.JOB_ENV] == "Clicked"
+    assert lw.child_env({lw.JOB_ENV: "Outer"})[lw.JOB_ENV] == "Outer"
+
+
+# --- capping ------------------------------------------------------------------
+
+
+def test_a_short_run_is_stored_whole():
+    text = "\n".join(f"line {n}" for n in range(20))
+    assert lw.cap(text) == text
+
+
+def test_an_over_long_run_keeps_both_ends():
+    """A head-only cap drops the summary every runner prints last -- the part an
+    agent reads first."""
+    text = "\n".join(f"line {n}" for n in range(5000))
+    capped = lw.cap(text, head=3, tail=2)
+    assert capped.splitlines()[:3] == ["line 0", "line 1", "line 2"]
+    assert capped.splitlines()[-2:] == ["line 4998", "line 4999"]
+    assert "4995 lines omitted" in capped
+
+
+# --- writing ------------------------------------------------------------------
+
+
+def test_the_artifact_lands_under_logs_in_the_cwd(tmp_path):
+    path = lw.write_artifact(tmp_path, "ship-sweep", "boom\n")
+    assert path == tmp_path / "logs" / "ship-sweep.log"
+    assert path.read_text(encoding="utf-8") == "boom\n"
+
+
+def test_a_pass_clears_what_the_last_failure_left(tmp_path):
+    """The whole reason the artifact is written on success too.
+
+    `_aged` because the retraction is now decided by comparing the file's mtime against
+    this run's start, and a file written microseconds earlier is not reliably *older*:
+    Windows dates a file from the tick-based system clock, which drifts either side of
+    the precise one `time.time()` reads. An hour makes the intended case -- a failure
+    left by an earlier run -- the one the test actually sets up.
+    """
+    _aged(lw.write_artifact(tmp_path, "ship-sweep", "an old failure\n"), 3600)
+    assert lw.main(["Ship: Sweep", "--", "x"], run=lambda _c: (0, "fine"), root=tmp_path) == 0
+    assert (tmp_path / "logs" / "ship-sweep.log").read_text(encoding="utf-8") == ""
+
+
+# --- two instances of one task, one artifact ----------------------------------
+#
+# A task may now run several instances at once (`runOptions.instanceLimit`), so the
+# single artifact has two writers and the losing order is not the obvious one: an empty
+# body is a *retraction*, so a short pass finishing after a long run already failed
+# would delete a failure nobody has read.
+
+
+def _aged(path, seconds):
+    """Backdate `path`'s mtime, so "written before this run started" is not a race."""
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime - seconds))
+
+
+def test_a_pass_does_not_retract_a_failure_written_after_it_started(tmp_path):
+    started = time.time() - 60
+    path = lw.write_artifact(tmp_path, "preview", "the other instance failed\n")
+    assert lw.write_artifact(tmp_path, "preview", "", since=started) == path
+    assert path.read_text(encoding="utf-8") == "the other instance failed\n"
+
+
+def test_a_pass_still_clears_a_report_older_than_this_run(tmp_path):
+    """The single-instance behaviour is the common case and must not regress: a task
+    that passes retracts the failure it left last time."""
+    path = lw.write_artifact(tmp_path, "preview", "yesterday's failure\n")
+    _aged(path, 3600)
+    assert lw.write_artifact(tmp_path, "preview", "", since=time.time()) == path
+    assert path.read_text(encoding="utf-8") == ""
+
+
+def test_a_failure_is_never_held_back_by_a_newer_file(tmp_path):
+    """Only the retraction is skipped. The last failure to finish is the one worth
+    keeping, and the other instance's terminal still holds its own."""
+    path = lw.write_artifact(tmp_path, "preview", "the other instance failed\n")
+    assert lw.write_artifact(tmp_path, "preview", "this one failed too\n", since=time.time() - 60)
+    assert path.read_text(encoding="utf-8") == "this one failed too\n"
+
+
+def test_without_a_start_time_the_artifact_is_always_overwritten(tmp_path):
+    """`since` defaults to 0 -- an unknown start time cannot rule anything out, so the
+    caller that does not pass one gets exactly the old behaviour."""
+    path = lw.write_artifact(tmp_path, "preview", "a failure\n")
+    assert lw.write_artifact(tmp_path, "preview", "") == path
+    assert path.read_text(encoding="utf-8") == ""
+
+
+def test_a_wrapped_pass_dates_itself_from_before_the_command_ran(tmp_path):
+    """`main` has to take the timestamp *before* the command, not after: a run that
+    fails while this one is working is the case being protected, and a stamp taken at
+    the end is after it."""
+    path = tmp_path / "logs" / "t.log"
+
+    def run(_command):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A file's mtime is taken from the system clock, which on Windows advances on a
+        # ~15ms tick, while `time.time()` does not -- so a file written in the same tick
+        # as the stamp can be dated *before* it. Spending a few ticks here is what makes
+        # "written after main started" true of the timestamps and not just of the order.
+        time.sleep(0.05)
+        path.write_text("a concurrent failure\n", encoding="utf-8")
+        return 0, "fine"
+
+    assert lw.main(["T", "--", "x"], run=run, root=tmp_path) == 0
+    assert path.read_text(encoding="utf-8") == "a concurrent failure\n"
+
+
+def test_an_unwritable_logs_directory_does_not_change_the_exit_code(tmp_path):
+    """The artifact reports on the task; it never overrules it."""
+    (tmp_path / "logs").write_text("not a directory", encoding="utf-8")
+    assert lw.write_artifact(tmp_path, "x", "body") is None
+    assert lw.main(["T", "--", "x"], run=lambda _c: (3, "boom"), root=tmp_path) == 3
+
+
+# --- end to end ---------------------------------------------------------------
+
+
+def test_the_wrapped_commands_exit_code_is_the_wrappers(tmp_path):
+    for code in (0, 1, 2, 7):
+        assert lw.main(["T", "--", "x"], run=lambda _c, c=code: (c, "out"), root=tmp_path) == code
+
+
+def test_a_real_child_is_streamed_and_captured(tmp_path, capsys):
+    """`stream` is the one part that cannot be proven with a stub: it has to actually
+    read a pipe, keep a copy, and report the child's code."""
+    script = "import sys; print('to stdout'); print('to stderr', file=sys.stderr); sys.exit(4)"
+    code, output = lw.stream([sys.executable, "-c", script])
+    assert code == 4
+    assert "to stdout" in output
+    assert "to stderr" in output  # merged on purpose -- one pipe, no deadlock
+    assert "to stdout" in capsys.readouterr().out  # and it reached the terminal
+
+
+def test_a_real_failure_lands_in_the_file_the_terminal_points_at(tmp_path, capsys):
+    script = "import sys; print('boom'); sys.exit(1)"
+    code = lw.main(["Ship: Sweep", "--", sys.executable, "-c", script], root=tmp_path)
+    assert code == 1
+    written = (tmp_path / "logs" / "ship-sweep.log").read_text(encoding="utf-8")
+    assert "boom" in written
+    assert "logs/ship-sweep.log" in capsys.readouterr().err
+
+
+def test_a_clicked_run_killed_mid_way_leaves_its_own_account(tmp_path):
+    """525ec1bc: homelab's generator run died with its terminal, and what its session
+    found was another project's report from six days before."""
+    log = tmp_path / "logs" / "new.log"
+    log.parent.mkdir()
+    log.write_text("the last run's report\n", encoding="utf-8")
+    script = "import time; print('got this far', flush=True); time.sleep(60)"
+    wrap = (sys.executable, str(REPO_ROOT / "scripts" / "log-wrap.py"), "New", "--")
+    wrapper = subprocess.Popen(
+        [*wrap, sys.executable, "-c", script],
+        cwd=tmp_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and "got this far" not in log.read_text(encoding="utf-8"):
+        time.sleep(0.05)
+    wrapper.kill()
+    wrapper.wait(timeout=30)
+    left = log.read_text(encoding="utf-8")
+    assert "not finished" in left and "got this far" in left
+    assert "the last run's report" not in left
+
+
+def test_a_clicked_run_that_passes_still_empties_its_file(tmp_path):
+    """The progress lines are this run's own, so they do not hold its retraction back."""
+    command = ["T", "--", sys.executable, "-c", "print('fine')"]
+    assert lw.main(command, root=tmp_path) == 0
+    assert (tmp_path / "logs" / "t.log").read_text(encoding="utf-8") == ""
+
+
+def test_a_run_finishing_after_another_wrote_keeps_that_report(tmp_path):
+    """`write_artifact`'s concurrency guard still holds against another run's write."""
+    log = tmp_path / "logs" / "t.log"
+    handle = lw.open_progress(tmp_path, "t", "T", ["x"])
+    mine = lw.close_progress(handle, 0.0)
+    log.write_text("another run's failure\n", encoding="utf-8")
+    os.utime(log, (mine + 5, mine + 5))
+    lw.write_artifact(tmp_path, "t", "", since=mine)
+    assert log.read_text(encoding="utf-8") == "another run's failure\n"
+
+
+def test_progress_that_cannot_be_written_changes_nothing_about_the_run(tmp_path):
+    (tmp_path / "logs").write_text("a file where the directory goes", encoding="utf-8")
+    assert lw.open_progress(tmp_path, "t", "T", ["x"]) is None
+    assert lw.close_progress(None, 12.5) == 12.5
+
+
+def test_an_unattended_run_takes_no_file_over_before_it_ends(tmp_path, monkeypatch):
+    """`schedule_health` reads that file's time as a finished run's."""
+    monkeypatch.setattr(lw, "open_progress", lambda *a: pytest.fail("opened"))
+    command = ["--always", "T", "--", sys.executable, "-c", "print('fine')"]
+    assert lw.main(command, root=tmp_path) == 0
+
+
+# --- the unattended caller ----------------------------------------------------
+#
+# Everything above assumes someone is watching the terminal. A scheduled job has no
+# terminal at all: on Windows it runs under `pythonw.exe`, where `sys.stdout` is None
+# rather than a stream that discards. These are the two things that breaks.
+
+
+def test_the_leading_always_flag_is_consumed_not_treated_as_the_title():
+    assert lw.parse_argv(["--always", "Nightly", "--", "x"]) == ("Nightly", ["x"], True)
+    assert lw.parse_argv(["Nightly", "--", "x"]) == ("Nightly", ["x"], False)
+
+
+def test_always_is_only_read_from_the_front():
+    """A title is free-form text and the wrapped command has its own flags; scanning
+    the whole argv would let either turn this mode on by accident."""
+    title, command, always = lw.parse_argv(["Deploy --always", "--", "x", "--always"])
+    assert (title, always) == ("Deploy --always", False)
+    assert command == ["x", "--always"]
+
+
+def test_a_malformed_argv_is_still_rejected_with_the_flag():
+    assert lw.parse_argv(["--always"]) is None
+    assert lw.parse_argv(["--always", "--", "x"]) is None  # no title
+
+
+def test_a_passing_unattended_run_records_that_it_passed(tmp_path):
+    """For a job nobody watches, an empty file cannot be told apart from a job that
+    stopped being scheduled -- which is the failure this whole tier exists to catch."""
+    assert (
+        lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (0, "skipped"), root=tmp_path)
+        == 0
+    )
+    written = (tmp_path / "logs" / "nightly.log").read_text(encoding="utf-8")
+    assert "# exit: 0" in written
+    assert "skipped" in written
+    assert "# when:" in written  # a passing report with no clock on it proves nothing
+
+
+def test_an_unattended_failure_still_reads_like_every_other_failure(tmp_path):
+    body = lw.artifact_body("Nightly", ["x"], 1, "boom", always=True)
+    assert "# exit: 1" in body
+    assert "# fix: re-run" in body
+    assert "boom" in body
+
+
+def test_a_watched_run_is_unchanged_by_the_new_parameter(tmp_path):
+    assert lw.artifact_body("T", ["x"], 0, "out") == ""
+
+
+def test_echo_survives_an_interpreter_with_no_stdout():
+    """`pythonw.exe` sets `sys.stdout` to None. Writing to it raised AttributeError on
+    the child's first line of output, killing the wrapper mid-run -- so the scheduled
+    job exited non-zero and wrote no artifact, which is the one context where nobody
+    would see either."""
+    lw.echo("a line", out=None)  # must not raise
+
+
+def test_echo_survives_a_stream_closed_underneath_it():
+    class Closed:
+        def write(self, _text):
+            raise ValueError("I/O operation on closed file")
+
+        def flush(self):
+            raise ValueError("I/O operation on closed file")
+
+    lw.echo("a line", out=Closed())  # must not raise
+
+
+def test_a_child_is_captured_even_with_no_terminal_to_mirror_to(tmp_path, monkeypatch):
+    """The end-to-end shape of the above: output still reaches the artifact when there
+    is nowhere to echo it."""
+    monkeypatch.setattr(sys, "stdout", None)
+    code, output = lw.stream([sys.executable, "-c", "print('captured anyway')"])
+    assert code == 0
+    assert "captured anyway" in output
+
+
+def test_the_script_runs_as_a_script(tmp_path):
+    """It is invoked by `python scripts/log-wrap.py ...` from a task, never imported,
+    so the `__main__` path has to work with no package context."""
+    script = REPO_ROOT / "scripts" / "log-wrap.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "T", "--", sys.executable, "-c", "print('hi')"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "hi" in result.stdout
+    assert (tmp_path / "logs" / "t.log").read_text(encoding="utf-8") == ""
+
+
+# --- the command's processes die with the wrapper -----------------------------
+#
+# `CREATE_NO_WINDOW` gives the child a console of its own, so closing the task's terminal
+# reaches the wrapper and never the child: ec0274d1, a `ui-task.py` server still answering
+# on its port after its terminal was closed.
+
+# The child prints its own pid and its child's, then waits on that child; the grandchild
+# holds none of the pipe, so only containment can reach it.
+SERVER = (
+    "import os, subprocess, sys\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+    " stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+    "print(os.getpid(), g.pid, flush=True)\n"
+    "{tail}\n"
+)
+
+
+def _zombie(pid: int) -> bool:
+    """Whether `pid` has exited and waits only to be reaped -- a container with no init
+    may never reap an orphan, and a signal still reaches its zombie."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[:1] == ["Z"]
+
+
+def _exits_within(pid: int, seconds: float) -> bool:
+    """Whether process `pid` is gone, or goes within `seconds`."""
+    if sys.platform == "win32":  # spelled so mypy skips `WinDLL` off Windows
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return True
+        try:
+            return kernel32.WaitForSingleObject(handle, int(seconds * 1000)) == 0
+        finally:
+            kernel32.CloseHandle(handle)
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        # One look per pass: a second `_zombie` can run after init reaps the zombie the
+        # first one saw, and an absent `/proc` entry reads as not a zombie.
+        if _zombie(pid):
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.1)
+
+
+def _reap(*pids: int) -> None:
+    for pid in pids:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+            continue
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_a_zombie_reaped_between_two_looks_has_still_exited(monkeypatch):
+    """The gate's flake on e274312: `_exits_within` saw a zombie, looked again after init
+    had reaped it, found no `/proc` entry and read the gone process as one still running.
+    `os.kill` is stubbed because on Windows a signal 0 terminates the pid it names."""
+    looks = iter([True, False])
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    monkeypatch.setitem(globals(), "_zombie", lambda pid: next(looks))
+    assert _exits_within(4321, 0)
+
+
+def test_closing_the_terminal_takes_the_command_s_whole_tree_with_it(tmp_path):
+    """The reproduction from ec0274d1: the child and grandchild gone with the wrapper. On
+    Windows a closed terminal reaches only the wrapper, so killing it alone must be enough;
+    elsewhere it signals the terminal's process group, which the command never leaves."""
+    script = REPO_ROOT / "scripts" / "log-wrap.py"
+    child = SERVER.format(tail="g.wait()")
+    wrapper = subprocess.Popen(
+        [sys.executable, str(script), "T", "--", sys.executable, "-c", child],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name != "nt",
+    )
+    assert wrapper.stdout is not None
+    pids = [int(pid) for pid in wrapper.stdout.readline().split()]
+    try:
+        if sys.platform == "win32":  # spelled so mypy narrows `killpg` off Windows
+            wrapper.kill()
+        else:
+            os.killpg(wrapper.pid, 9)
+        wrapper.wait(timeout=10)
+        assert all(_exits_within(pid, 10) for pid in pids)
+    finally:
+        wrapper.stdout.close()
+        _reap(*pids)
+
+
+def test_a_process_the_command_left_running_on_purpose_survives_its_exit():
+    """A command that exits normally keeps what it started deliberately -- a launcher's
+    Docker Desktop: containment is for a wrapper killed mid-run, not for a finished one."""
+    code, output = lw.stream([sys.executable, "-c", SERVER.format(tail="")])
+    survivor = int(output.split()[1])
+    try:
+        assert code == 0
+        assert not _exits_within(survivor, 1)
+    finally:
+        _reap(survivor)
+
+
+def test_nothing_is_contained_off_windows(monkeypatch):
+    monkeypatch.setattr(lw, "ON_WINDOWS", False)
+    assert lw.contain(os.getpid()) is None
+    lw.release(None)  # a no-op, not an error
+
+
+def test_a_process_that_cannot_be_opened_is_left_uncontained():
+    """Best-effort, like every other part of this wrapper: no job is no reason to fail."""
+    assert lw.contain(0) is None
+
+
+# --- an unattended failure reaches the ledger --------------------------------
+#
+# Only `harness_events` is touched here, which is vendored alongside this file. That
+# devkit's triage CLI lists the event is devkit's own question, and is asserted in
+# `tests/test_harness_triage.py` -- a consumer has no such file.
+
+
+def _ledger(tmp_path, monkeypatch):
+    """Point the events ledger at `tmp_path` and hand back its path."""
+    events = load_module("scripts/hooks/harness_events.py")
+    ledger = tmp_path / "harness-events.log"
+    monkeypatch.setattr(events, "ledger_path", lambda root=None: ledger)
+    return ledger
+
+
+def test_an_unattended_failure_is_recorded_for_triage(tmp_path, monkeypatch):
+    """The gap this closes: the artifact is overwritten per run, so a job failing every
+    night keeps one night's reason and nothing says it has been failing at all."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    code = lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path)
+
+    assert code == 2
+    line = ledger.read_text(encoding="utf-8").strip()
+    assert lw.FAILED_EVENT in line
+    assert "Nightly" in line
+    assert "exit=2" in line
+
+
+def test_an_unattended_failure_is_kept_where_the_next_run_cannot_erase_it(tmp_path, monkeypatch):
+    """The regression. `Scheduled: Devkit Release` failed with exit 2 on 2026-09-18, the
+    next night's run passed and overwrote the artifact with its own success, and the
+    sweep that reached the ledger row a day later had the event and no reason for it.
+    A pass must leave the kept copy exactly as the failure wrote it."""
+    _ledger(tmp_path, monkeypatch)
+    logs = tmp_path / lw.LOGS_DIR
+
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "the reason"), root=tmp_path)
+    kept = logs / f"nightly{lw.FAILED_SUFFIX}.log"
+    assert "the reason" in kept.read_text(encoding="utf-8")
+
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (0, "all fine"), root=tmp_path)
+    assert "the reason" in kept.read_text(encoding="utf-8")
+    assert "all fine" in (logs / "nightly.log").read_text(encoding="utf-8")
+
+
+def test_each_failure_names_its_own_copy_not_the_jobs(tmp_path, monkeypatch):
+    """96d2638e / e711daa0: five groups of one job, each a different cause, were handed
+    the newest failure's `.failed.log` as their own evidence. Each row now names a copy
+    of its own failure, which the next failure does not overwrite."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "first cause"), root=tmp_path)
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "second cause"), root=tmp_path)
+
+    refs = [fields["artifact"] for fields in _fields(ledger)]
+    assert len(set(refs)) == 2 and all(r.startswith("logs/failed/nightly-") for r in refs)
+    assert "first cause" in (tmp_path / refs[0]).read_text(encoding="utf-8")
+    assert "second cause" in (tmp_path / refs[1]).read_text(encoding="utf-8")
+    assert "second cause" in (tmp_path / "logs" / "nightly.failed.log").read_text(encoding="utf-8")
+
+
+def test_the_per_failure_copies_are_bounded_per_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ARCHIVE_KEEP", 2)
+    folder = tmp_path / lw.LOGS_DIR / lw.ARCHIVE_DIR
+    folder.mkdir(parents=True)
+    # Another job whose slug starts the same is not this job's to prune.
+    (folder / "nightly-extra-20260101-000000.log").write_text("other", encoding="utf-8")
+    when = lw._dt.datetime(2026, 10, 8, 12, 30, 0)
+    refs = [lw.archive_artifact(tmp_path, "nightly", f"run {n}", now=when) for n in range(3)]
+
+    assert refs[0] == "logs/failed/nightly-20261008-123000.log"
+    assert refs[1] == "logs/failed/nightly-20261008-123000-2.log", "same second, own file"
+    kept = sorted(p.name for p in folder.iterdir())
+    assert kept == [
+        "nightly-20261008-123000-2.log",
+        "nightly-20261008-123000-3.log",
+        "nightly-extra-20260101-000000.log",
+    ]
+
+
+def test_an_unwritable_archive_falls_back_to_the_kept_copy(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path, monkeypatch)
+    monkeypatch.setattr(lw, "archive_artifact", lambda *_a, **_k: None)
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path)
+
+    assert "artifact=logs/nightly.failed.log" in ledger.read_text(encoding="utf-8")
+
+
+def test_the_kept_copy_does_not_claim_to_be_this_mornings_run(tmp_path, monkeypatch):
+    """A reader who believes a Tuesday file is today's is worse off than one with no
+    file, so the copy that a pass does not clear must not say `overwritten per run`."""
+    _ledger(tmp_path, monkeypatch)
+    lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path)
+
+    kept = (tmp_path / lw.LOGS_DIR / f"nightly{lw.FAILED_SUFFIX}.log").read_text(encoding="utf-8")
+    assert "overwritten per run" not in kept
+    assert "NEXT failure" in kept and "# when:" in kept
+
+
+def test_a_clicked_failure_is_recorded_for_triage_too(tmp_path, monkeypatch):
+    """Clicks used to file nothing, on the theory that the person had watched the
+    failure. The owner's rule is the opposite: every routine task that fails reaches the
+    ledger, because failures share causes and are triaged and fixed together. A person
+    who saw it fail had still been left to fix it alone (2026-10-03)."""
+    ledger = _ledger(tmp_path, monkeypatch)
+
+    assert lw.main(["Clicked", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path) == 2
+    line = ledger.read_text(encoding="utf-8").strip()
+    assert lw.FAILED_EVENT in line and "exit=2" in line
+    assert "task 'Clicked' failed" in line and "unattended" not in line, "says it was run by hand"
+
+
+def test_a_clicked_failure_is_kept_where_its_rerun_cannot_erase_it(tmp_path, monkeypatch):
+    """A click retried until green empties the per-run artifact, and the ledger row then
+    names a file holding nothing: the kept copy is what the row points at."""
+    _ledger(tmp_path, monkeypatch)
+    logs = tmp_path / lw.LOGS_DIR
+
+    lw.main(["Clicked", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path)
+    lw.main(["Clicked", "--", "x"], run=lambda _c: (0, "fine"), root=tmp_path)
+
+    assert "boom" in (logs / f"clicked{lw.FAILED_SUFFIX}.log").read_text(encoding="utf-8")
+    assert (logs / "clicked.log").read_text(encoding="utf-8") == ""
+
+
+def test_failure_message_tells_a_schedule_from_a_person():
+    assert lw.failure_message("Nightly", unattended=True) == "unattended task 'Nightly' failed"
+    assert lw.failure_message("Clicked", unattended=False) == "task 'Clicked' failed"
+
+
+def test_a_passing_clicked_run_leaves_no_event(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path, monkeypatch)
+
+    assert lw.main(["Clicked", "--", "x"], run=lambda _c: (0, "ok"), root=tmp_path) == 0
+    assert not ledger.exists()
+
+
+def test_a_passing_scheduled_run_leaves_no_event(tmp_path, monkeypatch):
+    """`--always` keeps the artifact on a pass; it must not also record a defect."""
+    ledger = _ledger(tmp_path, monkeypatch)
+
+    assert lw.main(["--always", "Nightly", "--", "x"], run=lambda _c: (0, "ok"), root=tmp_path) == 0
+    assert not ledger.exists()
+
+
+def test_the_message_is_stable_so_nightly_failures_are_one_defect(tmp_path, monkeypatch):
+    """`Item.signature` groups on the message, so the exit code and artifact path ride in
+    their own fields -- three bad nights are one item recurring, not three items."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    for code in (2, 3, 2):
+        lw.main(["--always", "N", "--", "x"], run=lambda _c, c=code: (c, "b"), root=tmp_path)
+
+    messages = {
+        pair.partition("=")[2]
+        for line in ledger.read_text(encoding="utf-8").splitlines()
+        for pair in line.split("\t")
+        if pair.startswith("message=")
+    }
+    assert len(messages) == 1
+
+
+def _fields(ledger) -> list[dict[str, str]]:
+    return [
+        dict(pair.partition("=")[::2] for pair in line.split("\t") if "=" in pair)
+        for line in ledger.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def test_an_unattended_failure_records_its_cause_so_two_causes_are_two_defects(
+    tmp_path, monkeypatch
+):
+    """950c4a96: keyed on the task alone, every failure of one job was one group, so a
+    new cause read as RECURRED and quoted the last, unrelated fix as what not to repeat.
+    The cause rides in its own field; the same cause on two nights stays one."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    for output in (
+        "Traceback (most recent call last):\n  x\nRuntimeError: pull at C:\\ws\\a1b2c3d4e5 took 31s\n",
+        "Traceback (most recent call last):\n  y\nRuntimeError: pull at C:\\ws\\f0e9d8c7b6 took 47s\n",
+        "fatal: could not read Username for 'https://github.com'\n",
+    ):
+        lw.main(["--always", "N", "--", "x"], run=lambda _c, o=output: (2, o), root=tmp_path)
+
+    causes = [row["cause"] for row in _fields(ledger)]
+    assert causes[0] == causes[1] == "RuntimeError: pull at <sha> took Ns"
+    assert causes[2].startswith("fatal: could not read Username")
+    assert len({row["message"] for row in _fields(ledger)}) == 1, "the task is still named once"
+
+
+@pytest.mark.parametrize(
+    ("output", "cause"),
+    [
+        # A traceback ends on its exception, however much the job printed after it.
+        ("Traceback:\n  f()\nKeyError: 'x'\nlog-wrap: done\n", "KeyError: 'x'"),
+        ("a\nsubprocess.CalledProcessError: Command '[git]' returned 128\n", None),
+        # pytest's first failed test, not the count line after it.
+        ("FAILED tests/test_a.py::test_b - assert 1\n=== 1 failed, 9 passed in 3.2s ===\n", None),
+        ("ok\nerror: pathspec 'x' did not match\n", "error: pathspec 'x' did not match"),
+        # 6ba2230e: a summary pointing at an artifact names no cause, so every failure
+        # of a collector was one group; the logged record that failed is the cause,
+        # read from its level on so the timestamp is not part of it.
+        (
+            "2026-10-05 23:44:23,102 WARNING social_scraper.export: export of posts failed: "
+            "[WinError 32] in use\nwaiting 124 s\nFAILED -- details in logs\\scrape-run.json\n",
+            "WARNING social_scraper.export: export of posts failed: [WinError N] in use",
+        ),
+        (
+            "WARNING a: slow\nERROR:root:db gone\nFAILED -- details in x.json\n",
+            "ERROR:root:db gone",
+        ),
+        # ecf22e00: a status line that names its error before the pointer is the cause,
+        # not the warning logged last -- here a consequence of the failure it names.
+        (
+            "2026-10-08 22:53:39,482 WARNING social_scraper.export: export of posts failed: "
+            "InternalError\n2026-10-08 22:59:20,917 WARNING social_scraper.export: export of "
+            "symbols deferred to the next run: out of export time\n"
+            "FAILED -- export posts: StoreError: s3://data-lake: put a/b.tmp failed: "
+            "InternalError -- details in logs\\scrape-run.json\n",
+            "FAILED -- export posts: StoreError: sN://data-lake: put a/b.tmp failed: InternalError",
+        ),
+        # With nothing else said, the pointer is still where to look.
+        ("FAILED -- details in logs/run.json\n", "FAILED -- details in logs/run.json"),
+        # Nothing error-shaped: the last line said is the best there is.
+        ("step 1\nstep 2\n\n", "step N"),
+        ("", ""),
+    ],
+)
+def test_failure_cause_is_the_line_that_names_the_failure(output, cause):
+    found = lw.failure_cause(output)
+    if cause is None:
+        assert found and found.split()[0] in output
+    else:
+        assert found == cause
+
+
+def test_failure_cause_strips_colour_and_is_bounded():
+    assert lw.failure_cause("\x1b[31mValueError: bad\x1b[0m\n") == "ValueError: bad"
+    assert len(lw.failure_cause("RuntimeError: " + "word " * 200)) <= lw.CAUSE_WIDTH
+    assert len(lw.cause_said("RuntimeError: " + "word " * 200)) <= lw.SAID_WIDTH
+
+
+PUSH_403 = (
+    "Pushing...\nfatal: unable to access 'https://github.com/someone/proj.git/': "
+    "The requested URL returned error: 403\n"
+)
+
+
+def test_the_cause_as_said_keeps_the_host_and_the_status_folding_drops():
+    """718f71c4: folding read this as `'https:/proj.git/' ... error: N`, and the 403 that
+    said what happened was only in the kept log."""
+    assert lw.cause_said(PUSH_403) == PUSH_403.splitlines()[1]
+    assert "403" not in lw.failure_cause(PUSH_403)
+    assert lw.cause_said("") == ""
+
+
+def test_a_failure_files_the_line_as_said_beside_its_folded_cause(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path, monkeypatch)
+    lw.main(["--always", "N", "--", "x"], run=lambda _c: (2, PUSH_403), root=tmp_path)
+    lw.main(["--always", "N", "--", "x"], run=lambda _c: (2, "KeyError: x\n"), root=tmp_path)
+
+    pushed, keyed = _fields(ledger)
+    assert "error: 403" in pushed["said"] and "github.com/someone" in pushed["said"]
+    assert pushed["cause"] == lw.failure_cause(PUSH_403)
+    assert "said" not in keyed, "nothing folded, so nothing said twice"
+
+
+SCRAPE_SAID = "FAILED -- details in logs\\scrape-run.json\n"
+
+
+def _scrape_report(tmp_path, errors):
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    report = {"ok": False, "counts": {"x": 0}, "errors": errors}
+    (tmp_path / "logs" / "scrape-run.json").write_text(json.dumps(report), encoding="utf-8")
+
+
+def test_a_status_line_pointing_at_an_artifact_is_followed_into_it(tmp_path, monkeypatch):
+    """6d11553e: a job keeping its terminal to a status line plus the path -- the
+    failure-artifact rule's own shape -- printed `FAILED -- details in <file>` for every
+    failure, so a renamed X op and one dead profile were one cause, and the second read
+    as a fix that had not held. The cause is in the file the line names."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    for first in (
+        "x: error: no timeline data captured (layout change?) <- https://x.com/a",
+        "x: error: profile unavailable <- https://x.com/b",
+    ):
+        _scrape_report(tmp_path, [first, "reddit: later"])
+        lw.main(["--always", "Scrape", "--", "x"], run=lambda _c: (1, SCRAPE_SAID), root=tmp_path)
+
+    renamed, dead = (row["cause"] for row in _fields(ledger))
+    assert renamed != dead
+    assert renamed.startswith("x: error: no timeline data captured")
+    assert "reddit" not in renamed, "the first error, not the last"
+
+
+@pytest.mark.parametrize(
+    ("artifact", "said"),
+    [
+        # A text artifact is read like output: its traceback's exception.
+        ("Traceback:\n  f()\nKeyError: 'k'\n", "KeyError: 'k'"),
+        # Nothing in it names a failure: the status line is still the best there is.
+        ('{"ok": false, "counts": {"x": 0}}', SCRAPE_SAID.strip()),
+        ("", SCRAPE_SAID.strip()),
+    ],
+)
+def test_the_artifact_is_read_by_its_own_shape(tmp_path, artifact, said):
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "scrape-run.json").write_text(artifact, encoding="utf-8")
+    assert lw.cause_said(lw.cause_source(SCRAPE_SAID, tmp_path)) == said
+
+
+def test_a_python_job_s_closing_pointer_is_still_last_when_it_reaches_the_ledger(
+    tmp_path, monkeypatch
+):
+    """583d8e80, end to end through a real child: upgrade-project.py prints its per-project
+    lines on stdout and closes on stderr with the pointer to its artifact. Buffered, the
+    stdout lines came out after the pointer, so the ledger filed a bystander's "already
+    on devkit" line instead of the owed release the artifact names."""
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    ledger = _ledger(tmp_path, monkeypatch)
+    (tmp_path / "logs").mkdir()
+    owed = "upgrade: devkit main carries 2 vendored change(s) v0.5.3 does not"
+    (tmp_path / "logs" / "upgrade.log").write_text(f"=== (release) ===\n{owed}\n", "utf-8")
+    script = (
+        "import sys; print('upgrade: carameli is already on devkit v0.5.3.'); "
+        "print('upgrade: details in logs/upgrade.log', file=sys.stderr); sys.exit(1)"
+    )
+
+    lw.main(["--always", "Up", "--", sys.executable, "-c", script], root=tmp_path)
+
+    [fields] = _fields(ledger)
+    assert fields["cause"] == lw.failure_cause(owed)
+
+
+def test_a_pointer_to_no_file_keeps_the_line_it_was_said_in(tmp_path):
+    assert lw.cause_source(SCRAPE_SAID, tmp_path) == SCRAPE_SAID
+    assert lw.cause_source("KeyError: k\n", tmp_path) == "KeyError: k\n", "no pointer, no read"
+
+
+def test_a_line_naming_its_cause_is_not_traded_for_the_artifact(tmp_path):
+    """social-scraper's fixed line leads with the error; the pointer after it is not
+    a reason to go elsewhere for what the line already says."""
+    _scrape_report(tmp_path, ["x: error: something else"])
+    said = "FAILED -- x: error: profile unavailable -- details in logs/scrape-run.json\n"
+    assert lw.cause_source(said, tmp_path) == said
+
+
+def test_a_ledger_that_cannot_be_written_does_not_fail_the_job(tmp_path, monkeypatch):
+    """Reporting never takes the job's exit code with it -- that would turn a gap in
+    reporting into a broken scheduled task."""
+    events = load_module("scripts/hooks/harness_events.py")
+
+    def explode(root=None):
+        raise OSError("no ledger here")
+
+    monkeypatch.setattr(events, "ledger_path", explode)
+
+    assert lw.main(["--always", "N", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path) == 2
+
+
+def test_record_failure_names_the_run_the_artifact_keeps(tmp_path, monkeypatch):
+    """Called directly rather than through `main`, because what a triaging agent reads is
+    these five fields: which task, what it ran, how it exited, and the file still holding
+    the output."""
+    ledger = _ledger(tmp_path, monkeypatch)
+
+    artifact = lw.artifact_ref("devkit-cut-release")
+    failure = lw.Failure("Devkit: Cut Release", ["python", "x.py"], 2, artifact, "E: x")
+    lw.record_failure(failure, tmp_path)
+
+    [fields] = _fields(ledger)
+    assert fields["event"] == lw.FAILED_EVENT
+    assert fields["exit"] == "2"
+    # The KEPT copy, not the per-run one: the event outlives the artifact, and the sweep
+    # that reads this row tomorrow needs this run's reason rather than tonight's.
+    assert fields["artifact"] == "logs/devkit-cut-release.failed.log"
+    assert fields["command"] == "python x.py"
+    assert "Devkit: Cut Release" in fields["message"]
+    assert fields["cause"] == "E: x"
+    assert "started" not in fields, "no start given: none invented"
+
+
+def test_a_failure_records_when_its_run_began_beside_when_it_ended(tmp_path, monkeypatch):
+    """1fad5675: a scrape begun at 04:00Z failed at 04:13Z on code from before the fix that
+    merged at 04:04Z. Dated only by when it was filed, it read as a fix that did not hold;
+    `started=` is what lets `fix_verify.covered` see it began on the old code."""
+    ledger = _ledger(tmp_path, monkeypatch)
+    began = _dt.datetime(2026, 10, 9, 4, 0, 1, tzinfo=_dt.UTC).timestamp()
+    monkeypatch.setattr(lw.time, "time", lambda: began)
+
+    lw.main(["--always", "N", "--", "x"], run=lambda _c: (1, "E: boom"), root=tmp_path)
+
+    [fields] = _fields(ledger)
+    assert fields["started"] == "2026-10-09T04:00:01+00:00"
+    assert lw.started_stamp(began) == fields["started"]
+    assert "head_at" not in fields, "no checkout: no commit time invented"
+
+
+def test_a_failure_records_when_the_checkout_it_ran_from_was_committed(tmp_path, monkeypatch):
+    """d7b9c8c4: a reconcile begun five minutes after the fix merged ran from a checkout
+    that had not pulled it yet. `head_at=` is read before the job runs -- a job may pull
+    its own checkout -- and is what lets `fix_verify.covered` see the code predated it."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_DATE": "2026-10-19T01:00:33-04:00",
+    }
+    # No hooks: this machine's global `core.hooksPath` may refuse a commit to the default branch.
+    hookless = tmp_path.parent / f"{tmp_path.name}-no-hooks"
+    hookless.mkdir()
+    git = ["git", "-c", f"core.hooksPath={hookless}", "-c", "commit.gpgsign=false"]
+    commit = [*git, "-C", str(tmp_path), "commit", "-q", "--allow-empty", "-m", "x"]
+    subprocess.run([*git, "init", "-q", str(tmp_path)], check=True, env=env)
+    subprocess.run(commit, check=True, env=env)
+    ledger = _ledger(tmp_path, monkeypatch)
+
+    def pulls_itself(_command):
+        later = {**env, "GIT_COMMITTER_DATE": "2026-10-19T05:20:00+00:00"}
+        subprocess.run(commit, check=True, env=later)
+        return 1, "E: boom"
+
+    lw.main(["--always", "N", "--", "x"], run=pulls_itself, root=tmp_path)
+
+    assert _fields(ledger)[0]["head_at"] == "2026-10-19T05:00:33+00:00"
+    assert lw.head_stamp(tmp_path) == "2026-10-19T05:20:00+00:00"
+    assert lw.head_stamp(tmp_path / "missing") == ""
+
+
+def test_a_kept_copy_that_could_not_be_written_falls_back_to_the_per_run_path(
+    tmp_path, monkeypatch
+):
+    """A `logs/` that cannot be written is never a reason to file no event, and a
+    pointer to the ordinary artifact still beats none."""
+    assert lw.artifact_ref("n", kept=False) == "logs/n.log"
+    ledger = _ledger(tmp_path, monkeypatch)
+    monkeypatch.setattr(lw, "write_artifact", lambda root, name, *_a, **_k: None)
+    monkeypatch.setattr(lw, "archive_artifact", lambda *_a, **_k: None)
+
+    lw.main(["--always", "N", "--", "x"], run=lambda _c: (2, "boom"), root=tmp_path)
+
+    assert _fields(ledger)[0]["artifact"] == "logs/n.log"

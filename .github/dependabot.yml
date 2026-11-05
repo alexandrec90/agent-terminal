@@ -1,0 +1,47 @@
+# Dependency updates, one ecosystem per manifest this project actually has.
+#
+# Grouping is not cosmetic. Ungrouped, a weekly run opens one PR per package and
+# every one of them costs a full PR Gate run. Minor/patch land as a single PR;
+# majors stay individual, so one that fails the gate holds back no other update.
+#
+# Neither is `assignees`, which every entry carries. A Dependabot PR matches none of
+# the tabs on github.com/pulls -- the bot is the author, it mentions nobody, and it
+# requests no review -- so without an assignee these PRs are reachable only by opening
+# this repository. Assignment is the one qualifier a config file can set that puts them
+# in a view someone already reads.
+#
+# `versioning-strategy` on the Python entry keeps Dependabot to the lock. Without it,
+# a grouped patch bump rewrote a library's `pandas>=2.2` as `pandas>=3.0.6`, and a
+# project depending on that library, whose other dependencies needed `pandas<3`, went
+# red on its own main. A floor says what the code needs; the lock says what was tested.
+# `lockfile-only`, not `increase-if-necessary`: under that one the uv updater still
+# rewrote `pyarrow>=17` as `pyarrow>=26.0.0`, a release the floor already allowed. The
+# cost is that a deliberate `<N` cap is never widened by the bot; that is a person's call.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    assignees:
+      - alexandrec90
+    versioning-strategy: lockfile-only
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The actions the workflows pin. Majors land as individual PRs and the auto-merge
+  # classifier holds them for review.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    assignees:
+      - alexandrec90
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

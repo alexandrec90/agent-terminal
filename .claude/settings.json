@@ -1,0 +1,18 @@
+{
+  "env": {
+    "BASH_MAX_OUTPUT_LENGTH": "20000",
+    "PYTHON_COLORS": "0",
+    "PY_COLORS": "0",
+    "TTY_COMPATIBLE": "0",
+    "TTY_INTERACTIVE": "0",
+    "MSYS2_ARG_CONV_EXCL": "origin/;upstream/;refs/",
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+    "OTEL_METRIC_EXPORT_INTERVAL": "10000",
+    "OTEL_LOGS_EXPORT_INTERVAL": "5000",
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=agent-terminal,service.instance.id=agent-terminal,deployment.environment=local"
+  }
+}

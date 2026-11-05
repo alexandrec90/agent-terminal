@@ -1,0 +1,589 @@
+#!/usr/bin/env python3
+"""Run every linter and write the failures to a single parseable artifact.
+
+The contract this implements (see CLAUDE.md, "Failure artifacts"): an agent fixing
+lint reads `logs/lint-errors.log`, never the terminal. So this script keeps the
+terminal to a status line plus the artifact path, and puts everything actionable in
+the file — on failure *and* on success, where it writes an empty artifact so a stale
+run can't mislead the next agent.
+
+Auto-fix runs before the reporting pass, so only genuinely unfixable errors are
+reported and the agent never burns a cycle on something `ruff --fix` already solved.
+
+Usage:
+    python scripts/lint-all.py            # whole repo
+    python scripts/lint-all.py --changed  # working-tree diff vs HEAD, plus untracked
+    python scripts/lint-all.py --paths a.py b.md  # exactly these (/ship's branch diff)
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ARTIFACT = REPO_ROOT / "logs" / "lint-errors.log"
+
+# Linters `pyproject.toml`'s dev group declares, so a missing one is a broken
+# environment rather than an absent optional tool. `run_tool` returns "" for a skip and
+# for a pass alike, so a run that skipped both printed `lint-all: clean` having checked
+# no Python at all. dotenv-linter and the frontend tools keep the note: nothing here
+# declares them, so their absence is a machine without them, not a broken install.
+REQUIRED_TOOLS = ("ruff", "mypy")
+
+# Names `run_tool` skipped for want of the tool; `main` clears it on entry.
+_SKIPPED: list[str] = []
+
+# ruff runs over the whole repo; mypy does not. `scripts/hooks/` and
+# `sync-devkit.py` are the *vendored* harness — byte-identical upstream code that
+# `sync-devkit.py --check` forbids this repo from editing, so reporting type errors
+# in it would hand the agent findings it is not allowed to fix. Narrowing the scope
+# here is belt to `[tool.mypy] exclude`'s braces in pyproject.toml: the config covers
+# directory recursion, this covers an explicit `mypy .`.
+MYPY_SCOPE = ["agent_terminal/", "tests/"]
+
+# Every Python path in `sync-devkit.py`'s MANIFEST, kept out of the passes that
+# *rewrite* files. Reporting on upstream code is merely unhelpful; reformatting it is
+# a change `sync-devkit.py --check` fails the build for, and the agent cannot fix
+# that by editing source either. The trigger is real: the harness is lint-clean only
+# because `scripts/**` ignores E501, and `ruff format` does not read per-file-ignores
+# — so it reflowed a long line in `harness_config.py` and the next step saw drift.
+# Broader than MYPY_SCOPE's inverse: `task_branch.py` is vendored too.
+NO_FIX_SCOPE = [
+    "scripts/hooks",
+    "scripts/sync-devkit.py",
+    "scripts/devkit_manifest.py",
+    "scripts/task_branch.py",
+]
+
+# dotenv-linter v4 takes a subcommand; a bare file list is rejected as an
+# unrecognised one, which reaches the artifact as a usage error no source edit can
+# fix. `--plain` keeps ANSI colour codes out of a file something else has to parse,
+# and `--skip-updates` stops the linter making a network call on every run.
+#
+# UnorderedKey is ignored deliberately, and narrowly — it is the one check here with
+# no correctness content. It wants every key alphabetised within its blank-line
+# group, which in `.env.example` means DATABASE_URL resequenced after the POSTGRES_*
+# components it is built from, ARCHIVE_ROOT after the S3 overrides that only apply
+# when it is *not* used, and the host ports shuffled out of service order. That
+# grouping is the file's entire documentation value. Per the lint policy in
+# `.claude/rules/engineering.md`: a rule that fires on what a formatter would decide
+# is misconfigured, so turn it off rather than train everyone to read past it.
+DOTENV_CMD = [
+    "dotenv-linter",
+    "check",
+    "--plain",
+    "--skip-updates",
+    "--ignore-checks",
+    "UnorderedKey",
+]
+
+
+def changed_paths() -> list[str]:
+    """Every tracked-but-modified plus untracked path, relative to the repo root.
+
+    `ls-files` asks first: refused a repository, it names the refusal, where `diff`
+    falls back to `--no-index` and prints its usage instead.
+    """
+    untracked = _git("ls-files", "--others", "--exclude-standard")
+    tracked = _git("diff", "--name-only", "HEAD")
+    return sorted({n for n in (tracked + untracked) if (REPO_ROOT / n).exists()})
+
+
+def explicit_paths(paths: list[str]) -> list[str]:
+    """Exactly the paths given, normalised, minus any that no longer exist.
+
+    `--paths` is how a caller that knows its own scope states it. `/ship` is the
+    motivating one: it insists on a clean tree and then had only `--changed` to ask
+    with, whose set is the working tree *versus HEAD* -- empty, by construction, for
+    every commit it was about to push. The gate passed having linted nothing.
+
+    A deleted path is dropped rather than passed on: there is nothing left to lint,
+    and ruff/mypy treat a missing argument as a usage error that fails the whole run.
+    """
+    return sorted({n.replace("\\", "/") for n in paths if (REPO_ROOT / n).exists()})
+
+
+def python_targets(paths: list[str]) -> list[str]:
+    """The lintable .py files among `paths`."""
+    return [n for n in paths if n.endswith(".py")]
+
+
+def changed_python_files() -> list[str]:
+    """Tracked-but-modified plus untracked .py files, relative to the repo root."""
+    return python_targets(changed_paths())
+
+
+def env_files(limit_to: list[str] | None = None) -> list[str]:
+    """Root-level `.env*` files, optionally narrowed to a changed-file list.
+
+    `.env` itself is gitignored and machine-local, so in practice this is
+    `.env.example` — the file every new clone copies, and therefore the one whose
+    typos cost the most. Read from the filesystem rather than hardcoded, so the pass
+    is simply inert in a project that has neither.
+    """
+    found = sorted(p.name for p in REPO_ROOT.glob(".env*") if p.is_file())
+    return found if limit_to is None else [p for p in found if p in set(limit_to)]
+
+
+# What the frontend typecheck answers for: a change to any of these, under the
+# `[frontend] dir` of `.devkit.toml`, is what a `--changed` run hands it. Without the
+# pass, a TypeScript-only change printed "nothing to do" and the fixer's lint step
+# checked nothing at all (2ed077d6).
+FRONTEND_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue")
+FRONTEND_CONFIGS = ("package.json", "tsconfig.json")
+
+
+def harness_tier(name: str) -> Any | None:
+    """`.devkit.toml`'s `[<name>]` tier when it is on, else None.
+
+    Read through the vendored `harness_config.py`, the same reader `stop.py` uses for
+    its typecheck, so the two can never disagree about where a tier is. Loaded by
+    path, which mypy does not follow into the vendored tree, and registered before it
+    runs: `@dataclass` looks its defining module up by name.
+    """
+    path = REPO_ROOT / "scripts" / "hooks" / "harness_config.py"
+    spec = importlib.util.spec_from_file_location("lint_all_harness_config", path)
+    if not path.is_file() or spec is None or spec.loader is None:
+        return None
+    config = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = config
+    try:
+        spec.loader.exec_module(config)
+        tier = getattr(config.load(REPO_ROOT), name)
+    except (ImportError, AttributeError):
+        return None
+    return tier if tier.enabled else None
+
+
+def frontend_tier() -> Any | None:
+    """`.devkit.toml`'s `[frontend]` tier when it is on, else None."""
+    return harness_tier("frontend")
+
+
+# What the desktop tier answers for. `scripts/desktop.py lint` is a whole-solution
+# command -- `dotnet format` then a build -- so a narrowed run only decides whether to
+# run it, never what it covers.
+DESKTOP_SUFFIXES = (".cs", ".xaml", ".csproj", ".props", ".targets", ".slnx", ".sln")
+DESKTOP_CONFIGS = ("global.json", ".editorconfig")
+DESKTOP_DRIVER = REPO_ROOT / "scripts" / "desktop.py"
+WINDOWS = os.name == "nt"
+
+
+def desktop_targets(paths: list[str], tier: Any | None) -> list[str]:
+    """The paths among `paths` the desktop lint answers for; none with no tier."""
+    if tier is None:
+        return []
+    return [
+        n for n in paths if n.endswith(DESKTOP_SUFFIXES) or n.rsplit("/", 1)[-1] in DESKTOP_CONFIGS
+    ]
+
+
+def desktop_section(tier: Any | None, changed: list[str], scoped: bool) -> str:
+    """The desktop lint's artifact section, with its own log inlined on a failure.
+
+    Off Windows, or with no `dotnet`, it is a missing host, not a finding: the PR gate's
+    Windows job, on the SDK `global.json` pins, is where the tier is gated, and a Linux
+    runner's own `dotnet` is whichever one its image carries. No driver is a tree whose
+    gated files have not been pulled yet.
+    """
+    if tier is None or (scoped and not changed):
+        return ""
+    if not DESKTOP_DRIVER.is_file():
+        print("  desktop: scripts/desktop.py missing — skipped (run sync-devkit.py --pull)")
+        return ""
+    if not WINDOWS:
+        print("  desktop: the desktop tier needs Windows — skipped")
+        return ""
+    if not shutil.which("dotnet"):
+        print("  desktop: no dotnet on PATH — skipped (install the SDK global.json names)")
+        return ""
+    section = run_tool(
+        "desktop", [sys.executable, str(DESKTOP_DRIVER), "lint"], "python scripts/desktop.py lint"
+    )
+    log = REPO_ROOT / "logs" / "desktop-lint.log"
+    if section and log.is_file():
+        section = section.rstrip("\n") + "\n" + log.read_text(encoding="utf-8") + "\n"
+    return section
+
+
+def frontend_targets(paths: list[str], tier: Any | None) -> list[str]:
+    """The paths among `paths` the frontend typecheck answers for; none with no tier."""
+    if tier is None:
+        return []
+    root = tier.dir.strip("/")
+    prefix = "" if root in ("", ".") else f"{root}/"
+    return [
+        n
+        for n in paths
+        if n.startswith(prefix)
+        and (n.endswith(FRONTEND_SUFFIXES) or n.rsplit("/", 1)[-1] in FRONTEND_CONFIGS)
+    ]
+
+
+def frontend_section(tier: Any | None, scripts: list[str], scoped: bool) -> str:
+    """The typecheck's artifact section. A whole-project command: tsc takes no file list.
+
+    It runs when the tier is on: over the whole frontend on a whole-repo run, and on a
+    narrowed one only when `scripts` -- what changed under it -- is not empty. No
+    `node_modules` is a missing tool, not a finding -- the same note `run_tool` gives
+    an absent linter -- since `npm run` would put "tsc is not recognized" in the artifact.
+    """
+    if tier is None or (scoped and not scripts):
+        return ""
+    if not (REPO_ROOT / tier.dir / "node_modules").is_dir():
+        print(f"  typecheck: no node_modules in {tier.dir} — skipped (run `npm ci` there)")
+        return ""
+    npm = shutil.which("npm") or "npm"
+    cmd = [npm, *tier.typecheck_cmd]
+    hint = f"cd {tier.dir} && npm {' '.join(tier.typecheck_cmd)}"
+    return run_tool("typecheck", cmd, hint, cwd=REPO_ROOT / tier.dir)
+
+
+def nothing_to_do(selected: list[str]) -> int:
+    """Report a narrowed run with nothing to lint, naming what went unlinted.
+
+    The names are the point: "nothing to do" alone cannot be told apart from a diff
+    the run never saw, and an agent spent a turn finding out which it was (2ed077d6).
+    """
+    if selected:
+        shown = ", ".join(selected[:5]) + (", ..." if len(selected) > 5 else "")
+        print(f"lint-all: no linter here covers the {len(selected)} file(s) ({shown});")
+        print("  nothing to do.")
+    else:
+        print("lint-all: no changed files; nothing to do.")
+    _write_artifact("")
+    return 0
+
+
+class GitFailed(RuntimeError):
+    """git could not say what changed, so the `--changed` set is unknown, not empty."""
+
+
+def _git(*args: str) -> list[str]:
+    """git's output lines; `GitFailed` when git could not answer.
+
+    Never `[]` on a failure: a refusal -- `detected dubious ownership` in a tree an
+    elevated process made -- would read as a clean tree, and `--changed` would print
+    "nothing to do" over a modified file.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *args], capture_output=True, text=True
+        )
+    except OSError as exc:
+        raise GitFailed(f"`git {' '.join(args)}` could not start: {exc}") from exc
+    if result.returncode != 0:
+        why = (
+            " ".join((result.stderr or result.stdout).split())[:300] or f"exit {result.returncode}"
+        )
+        raise GitFailed(f"`git {' '.join(args)}` failed: {why}")
+    return result.stdout.splitlines()
+
+
+def scope_unknown(exc: GitFailed) -> int:
+    """Report a `--changed` run that could not learn its scope: a failure, never a skip."""
+    print(f"lint-all: FAILED — {exc}")
+    print(f"  nothing was linted; name the files with --paths. Details in {ARTIFACT.name}")
+    _write_artifact(f"# git\n# fix: make git work in this tree, or pass --paths\n{exc}\n\n")
+    return 1
+
+
+def _missing_module(cmd: list[str]) -> bool:
+    """True when `cmd` is a `-m` invocation of a module this interpreter lacks.
+
+    The linters run as `[sys.executable, "-m", tool, ...]`, so the executable always
+    exists and `subprocess.run` never raises FileNotFoundError — the interpreter
+    itself exits 1 with "No module named mypy" on stderr. Without this probe that
+    text lands in the artifact as an unfixable finding, which is the exact outcome
+    run_tool's contract exists to prevent. Probing beats matching the message: the
+    subprocess runs under sys.executable, so find_spec here answers for the very
+    interpreter that would run it.
+    """
+    if len(cmd) < 3 or cmd[0] != sys.executable or cmd[1] != "-m":
+        return False
+    try:
+        return importlib.util.find_spec(cmd[2]) is None
+    except (ImportError, ValueError):
+        return True
+
+
+# An agent's shell sets `FORCE_COLOR` (Claude Code: 3), which ruff and mypy obey even
+# into a pipe, so a finding would reach the artifact wrapped in escape codes.
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+# Wall-clock bound on one linter, in seconds. A cold whole-repo mypy finishes well
+# inside it; it exists for the tool that never finishes. A project's lint runner once
+# ran pip-audit CPU-bound for 18 minutes with no output and nothing to stop it, so the
+# agent waiting on it lost the time and learned nothing about why.
+TOOL_TIMEOUT = 600.0
+# The head of the block `ruff check --fix --show-fixes` lists its fixes under.
+FIXED_HEAD = re.compile(r"^Fixed \d+ errors?:$")
+
+
+def run_tool(
+    name: str,
+    cmd: list[str],
+    fix_hint: str,
+    timeout: float = TOOL_TIMEOUT,
+    cwd: Path = REPO_ROOT,
+) -> str:
+    """Run one linter; return its artifact section, or "" when it passed or was absent.
+
+    A missing tool is NOT a failure. Writing "command not found" into the artifact
+    would hand the agent something it cannot fix in the source tree, so it degrades
+    to a terminal note instead. A tool still running after `timeout` seconds IS one: a
+    linter that never answered has not passed, so it gets a section naming the bound.
+    `cmd` is an argv, never a shell line -- with a shell in between, the kill would
+    reach only the shell and the linter would hold the pipe open past the bound.
+    """
+    if _missing_module(cmd):
+        _SKIPPED.append(name)
+        print(f"  {name}: not installed — skipped")
+        return ""
+    try:
+        # ruff and mypy write UTF-8 whatever the console's code page, and `text=True` read
+        # it as cp1252 on Windows: ruff's multiplication sign came out as two letters.
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout
+        )
+    except FileNotFoundError:
+        _SKIPPED.append(name)
+        print(f"  {name}: not installed — skipped")
+        return ""
+    except subprocess.TimeoutExpired:
+        print(f"  {name}: TIMED OUT after {timeout:g}s")
+        hung = f"{name} was killed after {timeout:g}s with no result: the tool hung"
+        return f"# {name}\n# fix: run `{' '.join(cmd)}` by hand to see where\n{hung}\n\n"
+    if result.returncode == 0:
+        print(f"  {name}: ok")
+        return ""
+    body = ANSI.sub("", result.stdout + result.stderr).strip()
+    print(f"  {name}: FAILED")
+    return f"# {name}\n# fix: {fix_hint}\n{body}\n\n"
+
+
+def rerun_in_tree_venv(module: str, argv: list[str] | None) -> int | None:
+    """This run's exit code under the tree's `.venv`, or None to carry on here.
+
+    Without it, a fresh `claude --worktree` tree with no `.venv` lints *clean*: every
+    tool is `-m` under an interpreter that lacks it, so `_missing_module` skips them
+    all. The vendored `scripts/hooks/toolchain.py` provisions the tree with this
+    project's own install command and runs this script again inside it; where this
+    interpreter already has `module`, or the vendored copy predates that, nothing
+    changes.
+    """
+    hooks = REPO_ROOT / "scripts" / "hooks"
+    if not (hooks / "toolchain.py").is_file():
+        return None
+    sys.path.insert(0, str(hooks))
+    try:
+        import toolchain
+
+        rerun = toolchain.rerun_in_venv
+    except (ImportError, AttributeError):
+        return None
+    return rerun(
+        REPO_ROOT, module, Path(__file__).resolve(), sys.argv[1:] if argv is None else argv
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--changed", action="store_true", help="lint only the working-tree diff")
+    # `/ship` passes the branch's diff here. It is part of the same contract as
+    # `--no-secrets` below: ship.py is vendored byte-identical and probes `--help` for
+    # this flag, falling back to `--changed` -- which, on the clean tree ship demands,
+    # is empty. A project that drops `--paths` still ships; its gate just checks nothing.
+    parser.add_argument(
+        "--paths",
+        nargs="+",
+        metavar="FILE",
+        default=[],
+        help="lint exactly these files, scoped as --changed is (used by /ship)",
+    )
+    # Accepted, and a no-op here: this project has no detect-secrets pass to skip.
+    # The Stop hook (`scripts/hooks/stop.py`) passes `--no-secrets` unconditionally,
+    # because a project whose lint runner *does* have one must skip it on every turn —
+    # secrets scanning is the pre-commit hook's job and running it churns
+    # `.secrets.baseline`. stop.py is vendored byte-identical and cannot introspect
+    # this file, so parsing the flag is part of the contract between the two. Omitting
+    # it is not a silent no-op: argparse rejects the unknown flag and exits 2, which
+    # the Stop hook reports as a lint failure on *every* stop, with a usage message
+    # instead of a finding and nothing in the source tree that can fix it.
+    parser.add_argument(
+        "--no-secrets",
+        action="store_true",
+        help="skip the secrets pass (accepted for Stop-hook compatibility; no-op here)",
+    )
+    return parser
+
+
+# `main`'s helpers are out of it for `structure_check`'s function limits, which the
+# project's own gate holds this file to: it is the project's, rendered from devkit's
+# template, so a branch added here reddens every project that refreshes it.
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    # After parsing, so `/ship`'s `--help` probe answers without installing anything.
+    rerun = rerun_in_tree_venv("ruff", argv)
+    if rerun is not None:
+        return rerun
+    _SKIPPED.clear()
+
+    # `--paths` and `--changed` are the same narrowing, differing only in who names the
+    # files; everything downstream treats them identically.
+    scoped = args.changed or bool(args.paths)
+    selected: list[str] = []
+    if scoped:
+        try:
+            selected = explicit_paths(args.paths) if args.paths else changed_paths()
+        except GitFailed as exc:
+            return scope_unknown(exc)
+    changed = selected if scoped else None
+    targets = python_targets(selected)
+    envs = env_files(changed)
+    tier = frontend_tier()
+    scripts = frontend_targets(selected, tier)
+    desktop = harness_tier("desktop")
+    sources = desktop_targets(selected, desktop)
+    if scoped and not (targets or envs or scripts or sources):
+        return nothing_to_do(selected)
+
+    label = f"{len(selected)} file(s)" if scoped else "whole repo"
+    print(f"lint-all: {label}")
+
+    sections = _python_passes(targets, scoped)
+
+    # `uv sync` installs this into the project's venv, so a provisioned checkout has
+    # it. A real executable rather than a `-m` module, so
+    # run_tool's FileNotFoundError branch is what degrades a missing one to a terminal
+    # note instead of an unfixable artifact entry. The workflow files are not linted
+    # here: actionlint runs from `.pre-commit-config.yaml`, where pre-commit builds the
+    # binary itself instead of relying on an installer having run on this machine.
+    if envs:
+        sections += run_tool("dotenv-linter", [*DOTENV_CMD, *envs], " ".join([*DOTENV_CMD, *envs]))
+    sections += frontend_section(tier, scripts, scoped)
+    sections += desktop_section(desktop, sources, scoped)
+    return _finish(sections)
+
+
+def _finish(sections: str) -> int:
+    """Write the artifact, report where it is, and return the run's exit code."""
+    _write_artifact(sections)
+    if unusable := not_clean_reason():
+        print(unusable)
+        return 1
+    if sections:
+        print(f"\nlint-all: FAILED — details in {ARTIFACT.relative_to(REPO_ROOT)}")
+        return 1
+    print(f"\nlint-all: clean (artifact cleared: {ARTIFACT.relative_to(REPO_ROOT)})")
+    return 0
+
+
+def not_clean_reason() -> str:
+    """The line to print when a REQUIRED linter could not run, else "".
+
+    Not an artifact finding -- no source edit fixes a missing tool -- but a statement
+    that the run cannot be believed, whose honest exit code is non-zero.
+    """
+    absent = [name for name in _SKIPPED if name in REQUIRED_TOOLS]
+    if not absent:
+        return ""
+    return (
+        f"\nlint-all: NOT CLEAN — {', '.join(absent)} could not be run, so nothing was "
+        f"checked for the rules they own. They are declared in pyproject.toml: run this "
+        f"under the project's .venv, or install them (`uv sync --all-extras --all-groups`)."
+    )
+
+
+def applied_fixes(output: str) -> list[str]:
+    """`path -- <count> <times> <rule> (<name>), ...` per file the `--show-fixes` block of
+    a `ruff check --fix` run names; none when it fixed nothing.
+
+    An unsafe fix changes code, not layout -- F841 deletes an assignment from a test
+    being written -- so each change is printed rather than passed over as "ruff: ok".
+    """
+    rows = output.splitlines()
+    start = next((i for i, row in enumerate(rows) if FIXED_HEAD.match(row)), len(rows))
+    files: list[tuple[str, list[str]]] = []
+    for row in rows[start + 1 :]:
+        if not row.strip():
+            break
+        if row.startswith("- "):
+            files.append((row[2:].rstrip(":"), []))
+        elif files:
+            files[-1][1].append(row.strip())
+    return [f"{path} -- {', '.join(codes)}" for path, codes in files]
+
+
+def _python_passes(targets: list[str], scoped: bool) -> str:
+    """Fix what ruff can, then the artifact's sections for ruff and mypy.
+
+    A narrowed run with only an `.env` or frontend edit leaves `targets` empty, and the
+    scope would then fall back to `["."]` -- silently widening a per-turn check into a
+    whole-repo pass. So a narrowed run with no Python to lint runs no Python pass.
+    """
+    if scoped and not targets:
+        return ""
+    scope = targets or ["."]
+    # Auto-fix first, then report. Both ruff passes mutate the same files, so they
+    # must stay sequential relative to each other, and both skip the vendored
+    # harness — see NO_FIX_SCOPE.
+    no_fix = [arg for path in NO_FIX_SCOPE for arg in ("--exclude", path)]
+    fix = ["check", *scope, "--fix", "--unsafe-fixes", "--show-fixes", *no_fix]
+    fixed = subprocess.run(
+        [sys.executable, "-m", "ruff", *fix],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    for line in applied_fixes(fixed.stdout or ""):
+        print(f"  ruff --fix changed {line}")
+    subprocess.run(
+        [sys.executable, "-m", "ruff", "format", *scope, *no_fix],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    sections = run_tool(
+        "ruff",
+        [sys.executable, "-m", "ruff", "check", *scope, "--output-format=full"],
+        "ruff check . --fix --unsafe-fixes",
+    )
+    scope_dirs = mypy_scope()
+    if not (targets or scope_dirs):
+        return sections
+    return sections + run_tool(
+        "mypy",
+        [sys.executable, "-m", "mypy", *(targets or scope_dirs), "--show-error-codes"],
+        f"mypy {' '.join(MYPY_SCOPE)} --show-error-codes",
+    )
+
+
+def mypy_scope() -> list[str]:
+    """`MYPY_SCOPE` minus the directories holding no Python.
+
+    mypy exits 2 on a directory with no `.py` in it, which would report a usage error no
+    source edit can fix -- and a desktop project's app and tests are C#, so a whole-repo
+    run there has nothing of its own to type-check. A changed script is still a target.
+    """
+    return [d for d in MYPY_SCOPE if next((REPO_ROOT / d).rglob("*.py"), None) is not None]
+
+
+def _write_artifact(sections: str) -> None:
+    ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
+    header = "# source: scripts/lint-all.py\n" if sections else ""
+    ARTIFACT.write_text(header + sections, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

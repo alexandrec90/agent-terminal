@@ -63,6 +63,10 @@ Add this project's specifics *below* — fixtures, isolation rules, markers, wha
 and where — but do not restate the policy above. It is vendored and drift-gated; a copy
 here is a fork that will disagree with it the first time either is edited.
 
+A test that needs this machine (Windows itself, since the gate is Linux) takes the
+`local` marker: `addopts` deselects it and only `python scripts/e2e.py` runs it. See
+`.claude/rules/local-e2e.md`.
+
 ## Guardrails
 
 Baseline guardrails — including the instruction-file feedback loop (**never silently

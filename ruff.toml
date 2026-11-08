@@ -47,8 +47,9 @@ ignore = ["E101", "E401", "E501", "E701", "E702", "E703", "E731", "E741", "E742"
 # same subprocess allowances as `scripts/**`. These arrive vendored
 # from devkit, so this line must stay in step with devkit's own ruff.toml.
 ".claude/skills/**/*.py" = ["S603", "S607", "S310"]
-# Tests: asserts (S101) and hardcoded test passwords (S105).
-"tests/**/*.py" = ["S101", "S105"]
+# Tests: asserts (S101), hardcoded test passwords (S105), and spawning this project's own
+# interpreter (S603), which the end-to-end tier exists to do. devkit's tests carry the same.
+"tests/**/*.py" = ["S101", "S105", "S603"]
 "scripts/hooks/tests/**/*.py" = ["S101", "S105"]
 
 [format]

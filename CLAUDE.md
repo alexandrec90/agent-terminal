@@ -78,7 +78,9 @@ here is a fork that will disagree with it the first time either is edited.
 - No test may reach the real `gh`. `gh_command` in test settings names a command that
   cannot run, which turns the PR board off, or `tests/e2e/fake_gh.py`. A real merge or
   close is outward-facing: real-repository checks are read-only.
-- The `local` marker is the window itself: `tests/e2e/`, run by `scripts/e2e.py`.
+- A test that needs this machine (Windows itself, since the gate is Linux) takes the
+  `local` marker: `addopts` deselects it and only `python scripts/e2e.py` runs it. The
+  window itself is `tests/e2e/`. See `.claude/rules/local-e2e.md`.
 - Never read a terminal's text from the DOM: WebGL paints to a canvas. Tests use
   `window.__agentTerminal.screen(id)`.
 

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Terminal</title>
+    <link rel="icon" href="icons/app.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="vendor/xterm.css" />
     <link rel="stylesheet" href="style.css" />
   </head>
@@ -11,7 +12,8 @@
     <aside id="sidebar">
       <div id="groups"></div>
       <button id="new-group" type="button" title="Start a session in any folder">
-        <span aria-hidden="true">+</span> New group
+        <svg class="icon" aria-hidden="true" data-icon="add"><use href="icons/ui.svg#add" /></svg>
+        New group
       </button>
     </aside>
 
@@ -20,7 +22,10 @@
       <div id="review" hidden></div>
       <div id="empty">
         <p>No sessions yet.</p>
-        <button id="empty-new" type="button">+ Start a session</button>
+        <button id="empty-new" type="button">
+          <svg class="icon" aria-hidden="true" data-icon="add"><use href="icons/ui.svg#add" /></svg>
+          Start a session
+        </button>
       </div>
     </main>
 

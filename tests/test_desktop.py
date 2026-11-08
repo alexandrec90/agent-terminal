@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent_terminal.__main__ import FolderPicker
+from agent_terminal.__main__ import APP_ICON, BACKGROUND, FolderPicker, run_window
 from agent_terminal.desktop import Desktop, DesktopRequests, no_picker
 from agent_terminal.settings import Settings
 
@@ -122,3 +122,41 @@ class TestFolderPicker:
         picker = FolderPicker()
         picker.window = FakeWindow(None)
         assert picker() is None
+
+
+class RecordingWebview:
+    """Stands in for `webview`, keeping what the window was opened with."""
+
+    def __init__(self) -> None:
+        self.created: dict[str, Any] = {}
+        self.started: dict[str, Any] = {}
+
+    def create_window(self, title, url, **options):
+        self.created = {"title": title, "url": url, **options}
+        return "the window"
+
+    def start(self, **options):
+        self.started = options
+
+
+class TestRunWindow:
+    @pytest.fixture
+    def webview(self, monkeypatch):
+        recorder = RecordingWebview()
+        monkeypatch.setattr("importlib.import_module", lambda _name: recorder)
+        return recorder
+
+    def test_opens_the_page_and_hands_the_window_to_the_picker(self, webview):
+        picker = FolderPicker()
+        run_window("http://127.0.0.1:1/", picker)
+        assert webview.created["url"] == "http://127.0.0.1:1/"
+        assert webview.created["background_color"] == BACKGROUND
+        assert picker.window == "the window"
+
+    def test_the_window_wears_the_app_icon(self, webview):
+        run_window("http://127.0.0.1:1/", FolderPicker())
+        assert webview.started["icon"] == str(APP_ICON)
+
+    def test_the_app_icon_is_where_the_window_looks(self):
+        """pywebview skips an icon path that is not a file, silently."""
+        assert APP_ICON.is_file()

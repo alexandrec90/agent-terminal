@@ -12,7 +12,23 @@ const STATUS_TEXT = {
 
 const ATTENTION_TEXT = { input: "needs your input", finished: "finished" };
 
-const CHECK_MARK = { passing: "✓", failing: "✗", pending: "…", none: "" };
+// Each names a symbol in icons/ui.svg.
+const CHECK_ICON = { passing: "check", failing: "failing", pending: "pending", none: "pr-open" };
+
+const SVG = "http://www.w3.org/2000/svg";
+
+// One of the interface icons, colored by the CSS `color` of whatever holds it. Drawn for
+// 16px: `.icon` keeps it there.
+function icon(name) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("aria-hidden", "true");
+  svg.dataset.icon = name;
+  const use = document.createElementNS(SVG, "use");
+  use.setAttribute("href", `icons/ui.svg#${name}`);
+  svg.append(use);
+  return svg;
+}
 
 function group(groups, path, name) {
   if (!groups.has(path)) {
@@ -51,6 +67,22 @@ function statusWord(tab) {
   return ATTENTION_TEXT[tab.attention] ?? STATUS_TEXT[tab.status];
 }
 
+// The states with an icon of their own; the rest keep the plain dot.
+function stateIcon(tab) {
+  if (tab.parked) return "parked";
+  if (needsInput(tab) || tab.status === "blocked") return "input";
+  if (tab.attention === "finished") return "finished";
+  if (tab.status === "exited") return "exited";
+  if (tab.status === "working") return "working";
+  return null;
+}
+
+function stateMark(name) {
+  const mark = span("tab-dot", "");
+  if (name) mark.append(icon(name));
+  return mark;
+}
+
 function tabMeta(tab) {
   const parts = [tab.agent];
   if (tab.worktree) parts.push("worktree");
@@ -65,18 +97,21 @@ function span(className, text) {
   return element;
 }
 
-function prChipText(pr) {
-  if (pr.state === "MERGED") return `PR #${pr.number} merged`;
-  if (pr.state === "CLOSED") return `PR #${pr.number} closed`;
-  if (pr.mergeable === "CONFLICTING") return `PR #${pr.number} conflicts`;
-  return `PR #${pr.number} ${CHECK_MARK[pr.checks]}`.trim();
+// The icon says where the PR stands; the text says which PR, and names any state the
+// icon alone would leave a guess.
+function prChipFace(pr) {
+  if (pr.state === "MERGED") return ["pr-merged", `PR #${pr.number} merged`];
+  if (pr.state === "CLOSED") return ["pr-closed", `PR #${pr.number} closed`];
+  if (pr.mergeable === "CONFLICTING") return ["conflict", `PR #${pr.number} conflicts`];
+  return [CHECK_ICON[pr.checks] ?? "pr-open", `PR #${pr.number}`];
 }
 
 function prChip(pr, actions) {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = `tab-chip pr ${pr.state.toLowerCase()} checks-${pr.checks}`;
-  chip.textContent = prChipText(pr);
+  const [name, text] = prChipFace(pr);
+  chip.append(icon(name), text);
   chip.title = pr.title;
   chip.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -87,7 +122,8 @@ function prChip(pr, actions) {
 
 function shipChip(ship) {
   const refused = ship === "refused";
-  const chip = span(`tab-chip ship ${ship}`, refused ? "ship refused" : "ship queued");
+  const chip = span(`tab-chip ship ${ship}`, "");
+  chip.append(icon("ship"), refused ? "ship refused" : "ship queued");
   chip.title = refused
     ? "The fix pass tried this intent and could not ship it"
     : "Waiting for the fix pass to open a PR";
@@ -114,13 +150,14 @@ function renderTab(tab, activeId, actions) {
   close.type = "button";
   close.className = "tab-close";
   close.title = "Close tab";
-  close.textContent = "×";
+  close.setAttribute("aria-label", "Close tab");
+  close.append(icon("close"));
   close.addEventListener("click", (event) => {
     event.stopPropagation();
     actions.close(tab.id);
   });
 
-  row.append(span("tab-dot", ""), main, close);
+  row.append(stateMark(stateIcon(tab)), main, close);
   row.addEventListener("click", () => actions.activate(tab.id));
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -146,7 +183,7 @@ function renderPr(pr, reviewing, actions) {
   row.title = pr.title;
   const main = span("tab-main", "");
   main.append(span("tab-title", pr.title), span("tab-meta", prMeta(pr)));
-  row.append(span("tab-dot", ""), main);
+  row.append(stateMark("pr-open"), main);
   row.addEventListener("click", () => actions.review(pr));
   return row;
 }
@@ -164,7 +201,8 @@ function renderGroup(entry, view, actions) {
   add.type = "button";
   add.className = "group-add";
   add.title = `New session in ${entry.name}`;
-  add.textContent = "+";
+  add.setAttribute("aria-label", add.title);
+  add.append(icon("add"));
   add.addEventListener("click", () => actions.newInFolder(entry));
   head.append(span("group-name", entry.name), add);
 

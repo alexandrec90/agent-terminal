@@ -44,6 +44,14 @@ button {
   cursor: pointer;
 }
 
+/* icons/ui.svg is drawn on a 16px grid, sharp only at exactly that size. */
+.icon {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 /* ---- Sidebar ---- */
 
 #sidebar {
@@ -83,19 +91,27 @@ button {
 
 .group-add,
 .tab-close {
+  display: grid;
   flex: none;
+  place-items: center;
   width: 24px;
   height: 24px;
   border-radius: 4px;
   color: var(--muted);
-  font-size: 16px;
-  line-height: 1;
 }
 
 .group-add:hover,
 .tab-close:hover {
   background: var(--line);
   color: var(--text);
+}
+
+#new-group,
+#empty button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
 }
 
 #new-group {
@@ -132,12 +148,23 @@ button {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Where a tab stands: an icon from the sprite, or for the quiet states (starting, idle,
+   shell) a plain dot. Either way it is painted in `color`. */
 .tab-dot {
+  display: grid;
   flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.tab-dot:empty::before {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--muted);
+  background: currentcolor;
+  content: "";
 }
 
 .tab-main {
@@ -162,12 +189,23 @@ button {
 }
 
 .tab.working .tab-dot {
-  background: var(--working);
+  color: var(--working);
 }
 
-.tab.exited .tab-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--muted);
+.tab.working .tab-dot .icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab.working .tab-dot .icon {
+    animation: none;
+  }
 }
 
 /* Two kinds of stopped. `input` cannot go on without the user, so it is amber, and blinks
@@ -179,7 +217,7 @@ button {
 }
 
 .tab.attention .tab-dot {
-  background: var(--attention-color);
+  color: var(--attention-color);
 }
 
 .tab.attention .tab-meta {
@@ -220,7 +258,7 @@ button {
 }
 
 .tab.parked .tab-dot {
-  background: var(--parked);
+  color: var(--parked);
 }
 
 .tab.parked .tab-meta {
@@ -229,9 +267,11 @@ button {
 
 /* Where a tab stands in shipping. */
 .tab-chip {
-  display: inline-block;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
   margin-top: 2px;
-  padding: 0 6px;
+  padding: 0 6px 0 4px;
   border-radius: 4px;
   background: var(--line);
   color: var(--text);
@@ -269,16 +309,12 @@ button.tab-chip:hover {
 }
 
 /* A PR no tab holds. */
-.pr-row .tab-dot {
-  border-radius: 2px;
-}
-
 .pr-row.checks-passing .tab-dot {
-  background: var(--working);
+  color: var(--working);
 }
 
 .pr-row.checks-failing .tab-dot {
-  background: var(--failing);
+  color: var(--failing);
 }
 
 /* ---- Terminals ---- */

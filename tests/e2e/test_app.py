@@ -138,6 +138,49 @@ def lacks(name: str) -> Callable[[str], bool]:
     return lambda classes: name not in classes.split()
 
 
+def icon_in(selector: str) -> str:
+    """A page expression naming the sprite symbol the first icon under `selector` draws."""
+    return f"document.querySelector({json.dumps(selector + ' .icon')})?.dataset.icon"
+
+
+def test_the_sidebar_draws_each_state_from_the_icon_sprite(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        mark = f'[data-id="{tab}"] .tab-dot'
+        # Ready is one of the quiet states: the plain dot, with no icon in it.
+        assert await window.js(f"document.querySelector({json.dumps(mark)}).children.length") == 0
+
+        await window.type_into(tab, "ask\r")
+        await window.wait(f"{icon_in(mark)} === 'input'", "the input icon")
+        await window.type_into(tab, "work\r")
+        await window.wait_class(tab, lacks("attention"), "cleared by the agent resuming")
+        await window.type_into(tab, "finish\r")
+        await window.wait(f"{icon_in(mark)} === 'finished'", "the finished icon")
+        await window.right_click(f'[data-id="{tab}"]')
+        await window.wait(f"{icon_in(mark)} === 'parked'", "the parked icon")
+
+        assert await window.js(icon_in(f'[data-id="{tab}"] .tab-close')) == "close"
+        assert await window.js(icon_in('[data-project="alpha"] .group-add')) == "add"
+        assert await window.js(icon_in("#new-group")) == "add"
+
+        # Drawn, not an empty 16px box: a `<use>` whose symbol never arrived measures zero.
+        drawn = (
+            "(() => { const uses = [...document.querySelectorAll('#sidebar .icon use')];"
+            " return uses.length >= 4 && uses.every(u => u.getBBox().width > 0); })()"
+        )
+        await window.wait(drawn, "every sidebar icon to be drawn")
+        size = "getComputedStyle(document.querySelector('#sidebar .icon')).width"
+        assert await window.js(size) == "16px", "the sprite is sharp at 16px only"
+
+        favicon = (
+            "fetch(document.querySelector('link[rel=icon]').href)"
+            ".then(r => r.ok && r.headers.get('content-type'))"
+        )
+        assert "svg" in await window.js(favicon)
+
+    scenario(tmp_path, body)
+
+
 def test_a_tab_shows_when_its_agent_needs_the_user(tmp_path):
     async def body(_app: App, window: Window) -> None:
         waiting = await open_tab(window, "alpha")
@@ -322,6 +365,7 @@ def test_an_open_pr_can_be_reviewed_and_merged(tmp_path):
         row = "document.querySelector('[data-pr=\"505\"]')"
         await window.wait(f"!!{row}", "the PR in its project's group")
         assert await window.js(f"{row}.closest('.group').dataset.project") == "alpha"
+        assert await window.js(icon_in('[data-pr="505"] .tab-dot')) == "pr-open"
 
         await window.js(f"{row}.click()")
         await window.wait("!!document.querySelector('.review-actions .primary')", "the review")
@@ -398,12 +442,17 @@ def test_a_prompt_shows_where_it_stands_in_shipping(tmp_path):
         (alpha / "logs" / "ship-intent.md").write_text("Fix it\n\nBecause.\n", encoding="utf-8")
         chip = f"document.querySelector('[data-id=\"{tab}\"] .tab-chip')"
         await window.wait(f"{chip}?.textContent === 'ship queued'", "the ship chip")
+        on_chip = icon_in(f'[data-id="{tab}"] .tab-chip')
+        assert await window.js(on_chip) == "ship"
 
         # Reaped: the PR it became sits on the tab, and not as a row of its own.
         (alpha / "logs" / "ship-intent.md").unlink()
         write_prs(app, make_pr(9, "worktree-task"))
         await window.wait(f"{chip}?.textContent?.startsWith('PR #9')", "the PR on the tab")
         assert await window.js("document.querySelector('[data-pr]')") is None
+        # Its gate passed: the check says so, in place of the text's old tick.
+        assert await window.js(f"{chip}.textContent") == "PR #9"
+        assert await window.js(on_chip) == "check"
 
         # The chip opens the review, which goes back to the terminal.
         await window.js(f"{chip}.click()")
@@ -419,6 +468,7 @@ def test_a_prompt_shows_where_it_stands_in_shipping(tmp_path):
         # Merged on GitHub: the tab says so.
         write_prs(app, make_pr(9, "worktree-task", state="MERGED"))
         await window.wait(f"{chip}?.textContent === 'PR #9 merged'", "the merged chip")
+        assert await window.js(on_chip) == "pr-merged"
 
     scenario(tmp_path, body)
 

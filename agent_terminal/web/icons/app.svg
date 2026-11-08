@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Agent Terminal</title>
+  <rect width="64" height="64" rx="13" fill="#1a1c22"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="12.25" fill="none" stroke="#3a3d47" stroke-width="1.5"/>
+  <path d="M15.18 11.82L35.36 32L15.18 52.18L8.82 45.82L22.64 32L8.82 18.18z" fill="#e4e5e9"/>
+  <circle cx="45" cy="42" r="9" fill="#ffb224"/>
+</svg>

@@ -39,7 +39,7 @@ where = ["."]
 include = ["agent_terminal*"]
 
 [tool.setuptools.package-data]
-agent_terminal = ["web/*", "web/vendor/*"]
+agent_terminal = ["web/*", "web/vendor/*", "web/icons/*"]
 
 [tool.pytest.ini_options]
 # `testpaths` is what keeps `scripts/hooks/tests/` out of the application suite —

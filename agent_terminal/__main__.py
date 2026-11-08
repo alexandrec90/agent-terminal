@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 from agent_terminal.desktop import Desktop
@@ -16,6 +17,10 @@ log = logging.getLogger(__name__)
 
 WINDOW_SIZE = (1400, 900)
 BACKGROUND = "#0c0c0f"
+# pywebview documents `icon` as GTK and Qt only, but its WinForms window loads it too, as
+# a `System.Drawing.Icon`; without it the window wears python.exe's. Drawn by
+# `scripts/build_app_icon.py`.
+APP_ICON = Path(__file__).resolve().parent / "web" / "icons" / "app.ico"
 
 
 class FolderPicker:
@@ -45,7 +50,7 @@ def run_window(url: str, picker: FolderPicker) -> None:
         height=WINDOW_SIZE[1],
         background_color=BACKGROUND,
     )
-    webview.start()
+    webview.start(icon=str(APP_ICON))
 
 
 def main() -> int:

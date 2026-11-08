@@ -24,7 +24,7 @@ repos:
   # here instead of depending on a variable in whoever's shell, and a second machine that
   # has never cloned devkit is still gated.
   - repo: https://github.com/alexandrec90/devkit
-    rev: v0.11.84
+    rev: v0.11.85
     hooks:
       # Fails on a manifest the harness would otherwise ignore: unparseable TOML (the
       # loader falls back to neutral defaults rather than erroring), a path prefix missing

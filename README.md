@@ -129,6 +129,10 @@ every PR. The drift check is only meaningful when it can see devkit — if it pr
 where `DEVKIT_DIR` is usually unset, `pre-commit run devkit-drift --all-files` is the
 same check against the devkit rev pinned in `.pre-commit-config.yaml`.
 
+Tests a hosted runner cannot run are marked `local`, which plain `pytest` and the gate
+deselect. `python scripts/e2e.py` runs that tier here, and devkit's nightly
+`devkit-local-e2e` job runs it on the default branch; a red run reaches the fix pass.
+
 `.github/dependabot.yml` opens weekly dependency PRs, and
 `.github/workflows/dependabot-automerge.yml` merges every one of them once the gate
 passes, majors included: the gate is the review, so keep it covering what you care

@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Windows terminal with custom tab bar"
 requires-python = ">=3.12"
 dependencies = [
+  "aiohttp>=3.14.5",
   "pydantic-settings>=2.4",
+  # Windows-only: the app is, and the Linux CI runner builds neither. Tests fake the PTY.
+  "pywebview>=6.2.1; sys_platform == 'win32'",
+  "pywinpty>=3.1.2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -26,8 +30,16 @@ dev = [
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
+# A GUI script: Windows gives it no console window of its own.
+[project.gui-scripts]
+agent-terminal = "agent_terminal.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["agent_terminal*"]
+
+[tool.setuptools.package-data]
+agent_terminal = ["web/*", "web/vendor/*"]
 
 [tool.pytest.ini_options]
 # `testpaths` is what keeps `scripts/hooks/tests/` out of the application suite —
@@ -36,8 +48,9 @@ testpaths = ["tests/"]
 # No `-q` in `addopts`: an agent adds its own, and `-qq` drops the "N passed" line.
 # `-p devkit_temproot` is the vendored plugin giving each run a temp root of its own, so a
 # run elsewhere on the machine cannot fail this one at exit; `pythonpath` is where it lives.
-addopts = "-p devkit_temproot"
+addopts = "-p devkit_temproot -m 'not local'"
 pythonpath = ["scripts/pytest-plugins"]
+markers = ["local: needs this workstation's desktop; run by scripts/e2e.py"]
 
 [tool.mypy]
 python_version = "3.12"

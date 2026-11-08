@@ -1,12 +1,16 @@
 # Agent Terminal
 
-Windows terminal with custom tab bar
+Windows terminal for Claude Code and Codex sessions, with tabs grouped by project
 
 ## Tech Stack
 
 | Layer | Choice |
 | --- | --- |
 | Language | Python 3.12 |
+| Terminals | pywinpty (ConPTY), PowerShell 7 |
+| Window | pywebview (WebView2), a plain-JS page with no build step |
+| Terminal rendering | xterm.js, vendored in `agent_terminal/web/vendor/` |
+| Page to backend | aiohttp, one loopback WebSocket with a per-run token |
 | Tests | pytest |
 | Lint | ruff |
 
@@ -62,6 +66,21 @@ and full runs in CI.
 Add this project's specifics *below* — fixtures, isolation rules, markers, what to mock
 and where — but do not restate the policy above. It is vendored and drift-gated; a copy
 here is a fork that will disagree with it the first time either is edited.
+
+- CI is Linux, where `winpty` and `webview` do not install. Import them only through
+  `importlib` inside the function that needs them, and fake them in tests.
+- A tab's status comes from OSC 7501 as the agents really send it. When an agent changes,
+  capture a real session before changing `attention.py`; do not reason from its docs.
+  `trust.py` and `shipping.py` are the same: both read files other tools own.
+- Never write to an agent's trust record, `~/.claude.json` or `~/.codex/config.toml`: live
+  sessions rewrite the first constantly, and trust is the user's decision on the agent's
+  own screen. The app reads them, and only points the user at that screen.
+- No test may reach the real `gh`. `gh_command` in test settings names a command that
+  cannot run, which turns the PR board off, or `tests/e2e/fake_gh.py`. A real merge or
+  close is outward-facing: real-repository checks are read-only.
+- The `local` marker is the window itself: `tests/e2e/`, run by `scripts/e2e.py`.
+- Never read a terminal's text from the DOM: WebGL paints to a canvas. Tests use
+  `window.__agentTerminal.screen(id)`.
 
 ## Guardrails
 

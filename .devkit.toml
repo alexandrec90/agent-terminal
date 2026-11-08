@@ -55,10 +55,10 @@ head_bytes = 2000
 # `.devkit-structure.txt`, which is committed and may only shrink; the limits below
 # are the script's `DEFAULT_LIMITS` and are shown so a project can see what it holds
 # to. Every key is optional; an unknown limit or rule name is a configuration error.
-#[structure]
+[structure]
 #paths = ["agent_terminal/", "scripts/"]       # defaults to the app tree, scripts/ and the frontend src
-#exclude = ["agent_terminal/migrations/"]      # generated code the project does not answer for
-#entrypoints = ["agent_terminal/plugins/"]     # loaded by name, so the orphan rule must not see them
+exclude = ["agent_terminal/web/vendor/"]       # xterm.js, minified and not this project's
+entrypoints = ["agent_terminal/web/app.js"]    # loaded by index.html, which the orphan rule cannot read
 #disabled = []                               # e.g. ["orphan"] for a library whose modules are its API
 #
 #[structure.limits]

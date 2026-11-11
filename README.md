@@ -1,33 +1,124 @@
 # Agent Terminal
 
-Windows terminal with custom tab bar
+A Windows terminal for Claude Code and Codex sessions: tabs grouped by project down a
+sidebar instead of along a line, a tab that tells you when its agent needs you, and the
+PRs those sessions become, reviewed and merged from the same window.
 
-Generated from [devkit](https://github.com/alexandrec90/devkit)'s project
-template. The agent harness in `scripts/hooks/` is vendored from there — see
-`CLAUDE.md`, "Vendored agent harness".
+Each tab runs PowerShell 7 in a real pseudo-console with the agent inside it, so leaving
+the agent leaves you at a shell in the same place.
 
-## Quick start
+## Run it
 
 ```bash
-cp .env.example .env          # then fill in the placeholders
-uv sync --all-extras          # creates .venv from the committed uv.lock
-# no uv? pip install -e ".[dev]" works, but resolves fresh instead of from the lock
-pytest
+uv sync --all-extras
+.venv\Scripts\agent-terminal.exe        # no console window
 ```
 
-In VS Code, `Ctrl+Shift+B` runs the default build task and the task quick-pick
-(`Ctrl+Shift+P` → "Run Task") lists everything else, each with a one-line `detail`
-explaining what it costs and what it touches.
+Starting it a second time brings the running window forward.
 
+## Using it
+
+| To | Do |
+| --- | --- |
+| Start a session | **+** on a group, or **+ New group** for any folder: a project, a pasted path, or **Browse…** |
+| See who needs you | An amber tab, which blinks unless it's the one you're on |
+| See what has finished | A blue tab. It holds still, and can wait as long as you like |
+| Leave a tab for later | Right-click it. It greys out; right-click again to undo |
+| Close a session | **×** on the tab |
+| Copy / paste in a terminal | Right-click: copies a selection, pastes if there is none |
+| Review a PR | Click its chip on a tab, or its row in a group |
+| Merge or close a PR | **Merge** or **Close PR** in the review; both ask first |
+| Reopen a PR's session | **Open prompt** in the review, when its worktree still holds one |
+
+Amber means the agent cannot go on without you: it asked for permission, asked a
+question, failed, or is on a trust screen. Blue means it finished a turn. A grey tab
+stays grey until the agent stops on you *again*.
+
+Closing the window ends the agents and keeps the tabs: the next launch resumes every
+session, with its worktree, grey state and selected tab. **×** forgets a tab for good. It
+does not remove a worktree the session created, since that may hold work.
+
+### Starting somewhere new
+
+The dialog says what will happen before you press Start. In a folder an agent has not
+seen, it asks you to trust it on its own screen: choosing **Yes** in a Claude worktree tab
+carries on into the worktree without another click, because `claude -w` itself refuses
+instead of asking. Nothing here grants trust for you.
+
+A worktree needs a repository with a commit. In a folder without one the dialog offers
+**Initialize git and commit this folder**, which stages everything there, so look at what
+is in it first. Nothing is pushed.
+
+### PRs
+
+Every repository under the projects root, and every one a tab is in, is asked about its
+open PRs each minute. So a project with an open PR has a group even with no session in it.
+
+| A tab shows | Meaning |
+| --- | --- |
+| nothing | A prompt with nothing shipped yet |
+| `ship queued` | `logs/ship-intent.md` is waiting for the fix pass |
+| `ship refused` | The pass tried that intent and could not ship it |
+| `PR #12 ✓` | Its PR is open; `✗` checks failing, `…` running, `conflicts` needs a rebase |
+| `PR #12 merged` / `closed` | Its PR is done, and the tab is yours to close |
+
+A PR no tab holds is a row of its own in its group, marked `prompt on disk` if the
+worktree it came from still has a session to reopen. A tab and a PR are matched by the
+branch checked out in the tab's folder, so this works for sessions started outside the
+app, and follows a branch the fix pass renames.
+
+Merging squashes, as the harness's own merges do. It does not delete the branch: the
+repository's delete-on-merge setting covers the remote, and `worktree.py reconcile` owns
+the worktree.
+
+## How a tab knows
+
+No agent hook is involved. Both CLIs report their state to the terminal with an OSC 7501
+sequence, and Claude only does so once the terminal answers its `7501;?` query.
+`agent_terminal/attention.py` reads a copy of the output for those and answers the query;
+the sequences themselves were captured from real sessions, not taken from a spec.
+
+Claude takes a session id on its command line, so its tabs can always resume. Codex
+chooses its own and writes it to `~/.codex/sessions/`, so a Codex tab finds its session
+there by start time and directory (`agent_terminal/codex_sessions.py`). Two Codex sessions
+started in one project at the same moment, one of them outside this app, could be
+matched to the wrong tab.
+
+## Develop
+
+```bash
+python scripts/run-tests.py     # the tests for what changed
+python scripts/e2e.py           # the real window, driven over DevTools (needs a desktop)
+```
+
+`tests/e2e/` runs the real app with `tests/e2e/fake_agent.py` in place of an agent CLI and
+`tests/e2e/fake_gh.py` in place of `gh`, so no test can touch a real PR. The suite proper
+fakes the pseudo-console, because CI is Linux.
 
 ## Layout
 
 ```text
-agent_terminal/                  application code
-tests/                tests
-scripts/                 project scripts (Python, each with tests)
-scripts/hooks/           vendored agent harness — edit upstream in devkit
-.devkit.toml      the per-project harness seam (NOT vendored)
+agent_terminal/              the app
+  attention.py               what a tab's output says about its agent
+  agents.py                  how each agent is launched and resumed
+  codex_sessions.py          finding a Codex tab's session on disk
+  runner.py                  a tab's process; pty_session.py is the pseudo-console
+  manager.py                 the tabs, and every change the page can ask for
+  desktop.py                 what the page asks of the machine outside its tabs
+  folders.py                 scoping a tab to any folder
+  gitinfo.py                 what a folder is to git, mostly read straight from .git
+  trust.py                   reading whether an agent trusts a folder
+  prs.py                     pull requests through `gh`
+  pr_board.py                keeping PRs current and tying them to tabs
+  prompts.py                 finding the session that worked in a worktree
+  shipping.py                where a worktree stands with the fix pass
+  server.py                  the loopback server the window's page talks to
+  store.py                   the session file
+  web/                       the page; web/vendor/ is xterm.js
+tests/                       tests; tests/e2e/ is the local tier
+scripts/                     project scripts (Python, each with tests)
+scripts/hooks/               vendored agent harness — edit upstream in devkit
+.devkit.toml                 the per-project harness seam (NOT vendored)
 ```
 
 ## CI

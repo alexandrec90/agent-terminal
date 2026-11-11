@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!--
+    The interface icons. Use one as <svg class="icon"><use href="icons/ui.svg#add"/></svg>:
+    each takes its color from the CSS `color` of whatever it sits in.
+
+    Drawn for 16px. The -.5 viewBox puts every whole-number coordinate on a pixel center, so
+    a 1.5px stroke fills one column instead of smearing across two. At any other size that
+    alignment is lost, so keep them at 16px or a whole multiple of it, and keep straight
+    strokes on whole numbers when adding one.
+  -->
+  <defs>
+    <symbol id="working" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 8A6 6 0 1 1 8 2"/>
+    </symbol>
+    <symbol id="input" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6"/>
+      <path d="M8 5v3"/>
+      <circle cx="8" cy="11" r="1" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="finished" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6"/>
+      <path d="M5 8l2 2 4-4"/>
+    </symbol>
+    <symbol id="parked" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6"/>
+      <path d="M8 5v3l2 2"/>
+    </symbol>
+    <symbol id="exited" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6"/>
+      <rect x="5.5" y="5.5" width="5" height="5" rx=".5" fill="currentColor" stroke="none"/>
+    </symbol>
+
+    <symbol id="pr-open" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="3" r="2"/>
+      <circle cx="5" cy="12" r="2"/>
+      <circle cx="12" cy="12" r="2"/>
+      <path d="M5 5v5M12 10V7a3 3 0 0 0-3-3M11 2L9 4l2 2"/>
+    </symbol>
+    <symbol id="pr-merged" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="3" r="2"/>
+      <circle cx="5" cy="12" r="2"/>
+      <circle cx="12" cy="7" r="2"/>
+      <path d="M5 5v5M5 5c0 1 2 2 5 2"/>
+    </symbol>
+    <symbol id="pr-closed" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="3" r="2"/>
+      <circle cx="5" cy="12" r="2"/>
+      <circle cx="12" cy="12" r="2"/>
+      <path d="M5 5v5M12 10V8M10 2l4 4M14 2l-4 4"/>
+    </symbol>
+    <symbol id="conflict" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2l6 11H2z"/>
+      <path d="M8 6v3"/>
+      <circle cx="8" cy="11" r="1" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="check" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 8l3 3 7-7"/>
+    </symbol>
+    <symbol id="failing" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4l8 8M12 4l-8 8"/>
+    </symbol>
+    <symbol id="pending" viewBox="-.5 -.5 16 16" fill="currentColor" stroke="none">
+      <circle cx="3" cy="8" r="1.25"/>
+      <circle cx="8" cy="8" r="1.25"/>
+      <circle cx="13" cy="8" r="1.25"/>
+    </symbol>
+    <symbol id="ship" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 10V2M4 6l4-4 4 4M2 10v4h12v-4"/>
+    </symbol>
+
+    <symbol id="add" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 3v10M3 8h10"/>
+    </symbol>
+    <symbol id="close" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4l8 8M12 4l-8 8"/>
+    </symbol>
+    <symbol id="folder" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 3h5l2 2h5v8H2z"/>
+    </symbol>
+    <symbol id="terminal" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 3h12v10H2z"/>
+      <path d="M5 6l2 2-2 2M9 10h3"/>
+    </symbol>
+    <symbol id="worktree" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="3" r="2"/>
+      <circle cx="5" cy="12" r="2"/>
+      <circle cx="12" cy="5" r="2"/>
+      <path d="M5 5v5M12 7c0 3-7 1-7 3"/>
+    </symbol>
+  </defs>
+</svg>

@@ -223,9 +223,14 @@ def collected(*args: str) -> str:
     return done.stdout
 
 
+TIER = ("tests/test_local_console.py::", "tests/e2e/test_app.py::")
+
+
 def test_the_default_run_deselects_the_tier_and_the_script_s_selection_reaches_it():
-    tier = "tests/test_local_console.py::"
-    assert tier not in collected()
+    default = collected()
     selected = collected("-m", e2e.MARKER)
-    assert tier in selected
-    assert "tests/test_smoke.py::" not in selected
+    for tier in TIER:
+        assert tier not in default
+        assert tier in selected
+    assert "tests/test_package_data.py::" in default
+    assert "tests/test_package_data.py::" not in selected

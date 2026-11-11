@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Windows terminal with custom tab bar"
 requires-python = ">=3.12"
 dependencies = [
+  "aiohttp>=3.14.5",
   "pydantic-settings>=2.4",
+  # Windows-only: the app is, and the Linux CI runner builds neither. Tests fake the PTY.
+  "pywebview>=6.2.1; sys_platform == 'win32'",
+  "pywinpty>=3.1.2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -26,8 +30,16 @@ dev = [
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
+# A GUI script: Windows gives it no console window of its own.
+[project.gui-scripts]
+agent-terminal = "agent_terminal.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["agent_terminal*"]
+
+[tool.setuptools.package-data]
+agent_terminal = ["web/*", "web/vendor/*", "web/icons/*"]
 
 [tool.pytest.ini_options]
 # `testpaths` is what keeps `scripts/hooks/tests/` out of the application suite —

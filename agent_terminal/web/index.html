@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Terminal</title>
+    <link rel="icon" href="icons/app.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <div id="groups"></div>
+      <button id="new-group" type="button" title="Start a session in any folder">
+        <svg class="icon" aria-hidden="true" data-icon="add"><use href="icons/ui.svg#add" /></svg>
+        New group
+      </button>
+    </aside>
+
+    <main id="stage">
+      <div id="terminals"></div>
+      <div id="review" hidden></div>
+      <div id="empty">
+        <p>No sessions yet.</p>
+        <button id="empty-new" type="button">
+          <svg class="icon" aria-hidden="true" data-icon="add"><use href="icons/ui.svg#add" /></svg>
+          Start a session
+        </button>
+      </div>
+    </main>
+
+    <dialog id="new-tab">
+      <form method="dialog" id="new-tab-form">
+        <h2 id="new-tab-title">New session</h2>
+
+        <fieldset id="project-field">
+          <legend>Folder</legend>
+          <div id="project-list" role="listbox" aria-label="Project"></div>
+          <div class="path-row">
+            <input
+              id="folder-path"
+              type="text"
+              placeholder="Or any other folder: paste a path"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <button type="button" id="folder-browse">Browse…</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Agent</legend>
+          <div class="choices">
+            <label class="choice">
+              <input type="radio" name="agent" value="claude" checked />
+              <span>Claude</span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="agent" value="codex" />
+              <span>Codex</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="toggle" id="worktree-label">
+          <input type="checkbox" id="worktree" />
+          <span>Create in a new worktree</span>
+        </label>
+        <div id="folder-notes" hidden></div>
+        <button type="button" id="prepare-worktree" hidden></button>
+
+        <div class="actions">
+          <button type="button" id="new-tab-cancel">Cancel</button>
+          <button type="submit" id="new-tab-start" class="primary" disabled>Start</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirm">
+      <p id="confirm-text"></p>
+      <div class="actions">
+        <button type="button" id="confirm-cancel">Cancel</button>
+        <button type="button" id="confirm-ok" class="primary"></button>
+      </div>
+    </dialog>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-fit.js"></script>
+    <script src="vendor/addon-webgl.js"></script>
+    <script src="vendor/addon-web-links.js"></script>
+    <script src="vendor/addon-unicode11.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

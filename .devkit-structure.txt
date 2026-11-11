@@ -15,11 +15,14 @@
 # Module size -- `file_lines`, `imports`, `definitions` -- is advisory and never here.
 #
 # Regenerate only when adopting the gate: python scripts/hooks/structure_check.py --seed
+dependency::pyproject.toml::aiohttp = 1
 dependency::pyproject.toml::mypy = 1
 dependency::pyproject.toml::pre-commit = 1
 dependency::pyproject.toml::pydantic-settings = 1
 dependency::pyproject.toml::pytest = 1
 dependency::pyproject.toml::pytest-cov = 1
+dependency::pyproject.toml::pywebview = 1
+dependency::pyproject.toml::pywinpty = 1
 dependency::pyproject.toml::ruff = 1
 suppressions::scripts/notify-wrap.py = 1
 swallowed_errors::scripts/notify.py = 1

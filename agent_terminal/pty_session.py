@@ -27,6 +27,9 @@ class PtyProcess(Protocol):
 
 
 Spawn = Callable[[list[str], str, Mapping[str, str], tuple[int, int]], PtyProcess]
+# Ends a process tree by pid. Tests pass a recorder: the real one runs `taskkill.exe`,
+# which Linux has not, and which on Windows would end whatever real process owns the pid.
+Kill = Callable[[int], None]
 
 
 class SpawnError(Exception):

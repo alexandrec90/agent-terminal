@@ -31,7 +31,7 @@ def make_commit(folder: Path) -> None:
         ("config", "user.name", "T"),
         ("commit", "--allow-empty", "--message", "first"),
     ):
-        subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S603, S607 - fixed test commands
+        subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S607 - fixed test commands
 
 
 class FakeProcess:
@@ -97,11 +97,13 @@ class Rig:
         self.spawn_error: Exception | None = None
         self.clipboard = ""
         self.picked: str | None = None
+        self.killed: list[int] = []
         self.manager = TabManager(
             self.settings,
             self.messages.append,
             self.loop,
             spawn=self.spawn,
+            kill=self.killed.append,
             desktop=Desktop(
                 self.opened.append,
                 lambda: self.clipboard,
@@ -421,6 +423,16 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
 
 
 @run
+async def test_closing_a_tab_ends_its_process_through_the_given_kill(rig):
+    # The real kill runs `taskkill.exe`: absent on the Linux gate, and on Windows it
+    # would end whatever real process holds the fake's pid.
+    await rig.hello()
+    tab = await rig.create()
+    await rig.manager.handle({"type": "close", "id": tab["id"]})
+    assert rig.killed == [100]
+
+
+@run
 async def test_a_clean_shell_exit_closes_the_tab(rig):
     await rig.hello()
     await rig.create()
@@ -578,17 +590,14 @@ async def test_changes_are_saved_without_being_asked(rig):
 
 @run
 async def test_shutdown_saves_and_ends_every_process(rig):
-    closed = []
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "toggle_park", "id": tab["id"]})
-    for live in rig.manager.runner.live.values():
-        live.session._kill = closed.append
     await rig.manager.shutdown()
     saved = load_snapshot(rig.settings.state_file)
     assert saved.tabs[0].parked is True
     assert saved.active_id == tab["id"]
-    assert closed == [100]
+    assert rig.killed == [100]
 
 
 def write_rollout(settings: Settings, session_id: str, cwd: str, started: str) -> None:
@@ -681,11 +690,9 @@ async def test_the_plain_process_ends_when_the_worktree_replaces_it(rig):
     distrust(rig)
     await rig.hello()
     tab = await rig.create(worktree=True)
-    closed = []
-    rig.manager.runner.live[tab["id"]].session._kill = closed.append
     await rig.output(tab["id"], status("idle"))
     await settle(lambda: len(rig.processes) == 2)
-    assert closed == [100]
+    assert rig.killed == [100]
 
 
 @run

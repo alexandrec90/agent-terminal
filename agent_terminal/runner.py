@@ -18,7 +18,7 @@ from typing import Any
 from agent_terminal import agents, attention, trust
 from agent_terminal.attention import OscScanner, Presence
 from agent_terminal.codex_sessions import CodexSessionFinder
-from agent_terminal.pty_session import PtySession, Spawn, SpawnError
+from agent_terminal.pty_session import Kill, PtySession, Spawn, SpawnError, kill_tree
 from agent_terminal.settings import Settings
 from agent_terminal.store import Tab
 
@@ -64,10 +64,12 @@ class TabRunner:
         loop: asyncio.AbstractEventLoop,
         spawn: Spawn,
         events: RunnerEvents,
+        kill: Kill = kill_tree,
     ) -> None:
         self._settings = settings
         self._loop = loop
         self._spawn = spawn
+        self._kill = kill
         self._events = events
         self.live: dict[str, LiveTab] = {}
         self._finder = CodexSessionFinder(
@@ -84,6 +86,7 @@ class TabRunner:
             on_output=lambda text: self.receive(holder[0], text),
             on_exit=lambda code: self._to_loop(self._exited, holder[0], code),
             spawn=self._spawn,
+            kill=self._kill,
         )
         holder.append(LiveTab(tab=tab, session=session))
         self.live[tab.id] = holder[0]

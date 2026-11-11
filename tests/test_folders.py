@@ -14,7 +14,7 @@ from agent_terminal.settings import Settings
 
 
 def git(folder, *args):
-    subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S603, S607 - fixed test commands
+    subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S607 - fixed test commands
 
 
 def commit(folder):

@@ -71,7 +71,7 @@ class FakeGh(Gh):
 
 
 def git(folder: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S603, S607 - fixed test commands
+    subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)  # noqa: S607 - fixed test commands
 
 
 class Rig:

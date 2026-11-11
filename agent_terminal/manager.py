@@ -14,7 +14,7 @@ from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
 from agent_terminal.projects import list_projects
 from agent_terminal.prs import Gh
-from agent_terminal.pty_session import Spawn, conpty_spawn
+from agent_terminal.pty_session import Kill, Spawn, conpty_spawn, kill_tree
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.settings import Settings
 from agent_terminal.store import DebouncedSaver, Snapshot, Tab, load_snapshot
@@ -36,6 +36,7 @@ class TabManager:
         loop: asyncio.AbstractEventLoop,
         spawn: Spawn = conpty_spawn,
         desktop: Desktop | None = None,
+        kill: Kill = kill_tree,
     ) -> None:
         self._settings = settings
         self._emit = emit
@@ -56,6 +57,7 @@ class TabManager:
                 self._on_clean_exit,
                 lambda tab_id: emit({"type": "reset", "id": tab_id}),
             ),
+            kill,
         )
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)

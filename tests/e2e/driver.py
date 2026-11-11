@@ -222,9 +222,7 @@ class App:
         raise AssertionError("the window never appeared")
 
     def _launch(self) -> str:
-        self.process = subprocess.Popen(  # noqa: S603 - this repo's own app
-            self.command(), cwd=ROOT, env=self.env()
-        )
+        self.process = subprocess.Popen(self.command(), cwd=ROOT, env=self.env())
         return self._page_url()
 
     async def start(self) -> Window:
@@ -248,7 +246,7 @@ class App:
             " } | ForEach-Object { $_.ProcessId }); $tree += $more } while ($more);"
             "$tree"
         )
-        found = subprocess.run(  # noqa: S603 - a fixed script around a pid this test holds
+        found = subprocess.run(
             ["pwsh", "-NoProfile", "-Command", script],  # noqa: S607 - pwsh from PATH, as the app runs it
             capture_output=True,
             text=True,

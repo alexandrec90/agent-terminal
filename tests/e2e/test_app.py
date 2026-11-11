@@ -38,7 +38,7 @@ async def wait_launches(app: App, count: int) -> None:
 
 
 def process_running(pid: int) -> bool:
-    found = subprocess.run(  # noqa: S603 - a fixed command around a pid this test holds
+    found = subprocess.run(
         ["pwsh", "-NoProfile", "-Command", f"[bool](Get-Process -Id {pid} -ErrorAction Ignore)"],  # noqa: S607 - pwsh from PATH, as the app itself runs it
         capture_output=True,
         text=True,
@@ -48,7 +48,7 @@ def process_running(pid: int) -> bool:
 
 
 def git(folder: Path, *args: str) -> None:
-    subprocess.run(  # noqa: S603 - fixed test commands
+    subprocess.run(
         ["git", *args],  # noqa: S607 - git from PATH
         cwd=folder,
         check=True,
@@ -570,9 +570,7 @@ def test_right_click_in_a_terminal_pastes(tmp_path):
 
 def test_a_second_launch_hands_over_instead_of_doubling(tmp_path):
     def launch_again(app: App) -> int:
-        second = subprocess.run(  # noqa: S603 - this repo's own app
-            app.command(), cwd=app.root, env=app.env(), timeout=30, check=False
-        )
+        second = subprocess.run(app.command(), cwd=app.root, env=app.env(), timeout=30, check=False)
         return second.returncode
 
     async def body(app: App, _window: Window) -> None:

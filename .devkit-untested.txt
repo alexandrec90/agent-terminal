@@ -34,6 +34,7 @@ scripts/lint-all.py::frontend_section
 scripts/lint-all.py::frontend_targets
 scripts/lint-all.py::frontend_tier
 scripts/lint-all.py::harness_tier
+scripts/lint-all.py::manifest_paths
 scripts/lint-all.py::mypy_batches
 scripts/lint-all.py::mypy_scope
 scripts/lint-all.py::not_clean_reason

@@ -25,6 +25,7 @@ scripts/lint-all.py::GitFailed
 scripts/lint-all.py::applied_fixes
 scripts/lint-all.py::changed_paths
 scripts/lint-all.py::changed_python_files
+scripts/lint-all.py::conftest_root
 scripts/lint-all.py::desktop_section
 scripts/lint-all.py::desktop_targets
 scripts/lint-all.py::env_files
@@ -33,6 +34,7 @@ scripts/lint-all.py::frontend_section
 scripts/lint-all.py::frontend_targets
 scripts/lint-all.py::frontend_tier
 scripts/lint-all.py::harness_tier
+scripts/lint-all.py::mypy_batches
 scripts/lint-all.py::mypy_scope
 scripts/lint-all.py::not_clean_reason
 scripts/lint-all.py::nothing_to_do
@@ -42,6 +44,7 @@ scripts/lint-all.py::run_tool
 scripts/lint-all.py::scope_unknown
 scripts/lint-all.py::secrets_section
 scripts/lint-all.py::secrets_targets
+scripts/lint-all.py::vendored
 scripts/log-wrap.py::strip_ansi
 scripts/merge-dependabot-prs.py::blocking_checks
 scripts/merge-dependabot-prs.py::candidates

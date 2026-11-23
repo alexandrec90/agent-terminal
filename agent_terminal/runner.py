@@ -215,14 +215,14 @@ class TabRunner:
         if tab.id in self._finding_trees or not tab.session_id:
             return
         self._finding_trees.add(tab.id)
-        self._loop.create_task(self.find_claude_tree(tab))
+        self._loop.create_task(self.find_claude_tree(tab, tab.session_id))
 
-    async def find_claude_tree(self, tab: Tab) -> None:
+    async def find_claude_tree(self, tab: Tab, session_id: str) -> None:
         """Record the worktree Claude named for itself, once its transcript says where."""
         find = agents.claude_session_tree
         try:
             tree = await self._loop.run_in_executor(
-                None, find, self._settings.claude_home, tab.session_id
+                None, find, self._settings.claude_home, session_id
             )
         finally:
             self._finding_trees.discard(tab.id)

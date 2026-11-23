@@ -237,6 +237,7 @@ def test_groups_follow_their_sessions(tmp_path):
         assert await window.js("document.getElementById('project-field').hidden") is True
         await window.dialog_ready()
         assert await window.js("document.getElementById('worktree').disabled") is False
+        assert await window.js("document.getElementById('worktree').checked") is True
         await window.start_session("codex")
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 2", "a second tab in the group")
@@ -253,14 +254,17 @@ def test_a_folder_outside_git_says_why_and_can_be_made_ready(tmp_path):
         (tmp_path / "projects" / "beta" / "kept.txt").write_text("x", encoding="utf-8")
         await window.choose_project("beta")
         assert await window.js("document.getElementById('worktree').disabled") is True
+        assert await window.js("document.getElementById('worktree').checked") is False
         assert "isn't one" in await window.notes()
 
         await window.click("#prepare-worktree")
         await window.wait("!document.getElementById('worktree').disabled", "git to be set up")
         assert "isn't one" not in await window.notes()
         assert await window.js("document.getElementById('prepare-worktree').hidden") is True
+        # The default comes back once the folder can take a worktree.
+        assert await window.js("document.getElementById('worktree').checked") is True
 
-        await window.start_session(worktree=True)
+        await window.start_session(worktree=None)
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         assert (await window.tabs())[0]["worktree"] is True
 
@@ -299,7 +303,7 @@ def test_a_first_visit_asks_for_trust_then_loops_back_to_the_worktree(tmp_path):
         make_repository(repository)
         await window.choose_path(repository)
         await window.dialog_ready()
-        await window.click("#worktree")
+        await window.set_worktree(True)
         await window.wait("document.getElementById('folder-notes').textContent", "a warning")
         assert "worktree starts right after" in await window.notes()
 
@@ -311,7 +315,7 @@ def test_a_first_visit_asks_for_trust_then_loops_back_to_the_worktree(tmp_path):
         assert "Codex will ask" in await window.notes()
         assert "starts right after" not in await window.notes()
 
-        await window.start_session(worktree=False)
+        await window.start_session(worktree=None)
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         tab = (await window.tabs())[0]
         assert tab["worktree"] is True, "the toggle set above must have carried through"
@@ -340,7 +344,7 @@ def test_a_declined_trust_screen_says_so_and_leaves_a_shell(tmp_path):
         make_repository(repository)
         await window.choose_path(repository)
         await window.dialog_ready()
-        await window.click("#worktree")
+        await window.set_worktree(True)
         await window.click("#new-tab-start")
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         tab = (await window.tabs())[0]

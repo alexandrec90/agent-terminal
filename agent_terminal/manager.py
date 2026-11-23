@@ -10,6 +10,7 @@ from typing import Any
 
 from agent_terminal import agents, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit
+from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
 from agent_terminal.projects import list_projects
@@ -44,6 +45,7 @@ class TabManager:
         self._desktop = desktop or Desktop()
         self._tabs: list[Tab] = []
         self._active_id: str | None = None
+        self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
         self._saver = DebouncedSaver(loop, settings.state_file, self._snapshot)
@@ -75,6 +77,7 @@ class TabManager:
             "pr_resume": self._on_pr_resume,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **self._ordering.handlers(),
         }
 
     async def handle(self, message: dict[str, Any]) -> None:
@@ -128,6 +131,7 @@ class TabManager:
 
     async def _open(self, tab: Tab) -> None:
         self._tabs.append(tab)
+        self._ordering.place(tab.project_path)
         self._active_id = tab.id
         self.runner.add(tab)
         self._on_changed()
@@ -211,16 +215,20 @@ class TabManager:
                 "type": "state",
                 "active_id": self._active_id,
                 "tabs": tabs,
+                "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
             }
         )
 
     def _snapshot(self) -> Snapshot:
-        return Snapshot(tabs=self._tabs, active_id=self._active_id)
+        return Snapshot(
+            tabs=self._tabs, active_id=self._active_id, group_order=self._ordering.group_order
+        )
 
     async def _restore(self) -> None:
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
+        self._ordering.restore(snapshot.group_order)
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None
         self._active_id = snapshot.active_id if snapshot.active_id in ids else fallback

@@ -8,6 +8,7 @@ from agent_terminal.store import (
     DebouncedSaver,
     Snapshot,
     Tab,
+    clean_group_order,
     load_snapshot,
     parse_snapshot,
     save_snapshot,
@@ -80,6 +81,34 @@ def test_a_non_string_active_id_is_dropped():
 def test_a_key_from_another_version_is_ignored():
     data = {**make_tab().to_dict(), "from_the_future": True}
     assert tab_from_dict(data) == make_tab()
+
+
+def test_the_group_order_and_last_update_round_trip(tmp_path):
+    path = tmp_path / "state.json"
+    snapshot = Snapshot(tabs=[make_tab(updated_at=5.0)], group_order=["C:\\b", "C:\\demo"])
+    save_snapshot(path, snapshot)
+    assert load_snapshot(path) == snapshot
+
+
+def test_a_file_from_before_group_order_reads_as_none():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [make_tab().to_dict()]})
+    snapshot = parse_snapshot(text)
+    assert snapshot.group_order == []
+    assert snapshot.tabs[0].updated_at is None
+
+
+@pytest.mark.parametrize(
+    ("saved", "read"),
+    [
+        ("C:\\a", []),
+        (None, []),
+        (["C:\\a", 3, "C:\\b", "C:\\a"], ["C:\\a", "C:\\b"]),
+    ],
+)
+def test_a_malformed_group_order_keeps_only_its_paths(saved, read):
+    assert clean_group_order(saved) == read
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "group_order": saved})
+    assert parse_snapshot(text).group_order == read
 
 
 @pytest.mark.parametrize(("saved", "read"), [(True, "input"), (False, "")])

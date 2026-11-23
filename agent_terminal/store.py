@@ -37,6 +37,9 @@ class Tab:
     parked: bool = False
     # "", "input" or "finished": see `attention.Presence`.
     attention: str = ""
+    # When the session last did something the user set going; None until it has, when
+    # the page shows `created_at` instead.
+    updated_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +51,9 @@ class Snapshot:
 
     tabs: list[Tab] = field(default_factory=list)
     active_id: str | None = None
+    # The sidebar's group order, by project path. A group not named here comes after
+    # these, in the order it first appeared.
+    group_order: list[str] = field(default_factory=list)
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -72,7 +78,19 @@ def parse_snapshot(text: str) -> Snapshot:
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"malformed tab record: {exc}") from exc
     active = data.get("active_id")
-    return Snapshot(tabs=tabs, active_id=active if isinstance(active, str) else None)
+    return Snapshot(
+        tabs=tabs,
+        active_id=active if isinstance(active, str) else None,
+        group_order=clean_group_order(data.get("group_order")),
+    )
+
+
+def clean_group_order(value: object) -> list[str]:
+    """`value` as a group order: its strings, each once, in order. Anything that is not a
+    list is no order at all, which a file written before there was one also holds."""
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(item for item in value if isinstance(item, str)))
 
 
 def load_snapshot(path: Path) -> Snapshot:
@@ -96,6 +114,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
     payload = {
         "version": SCHEMA_VERSION,
         "active_id": snapshot.active_id,
+        "group_order": snapshot.group_order,
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
     }
     path.parent.mkdir(parents=True, exist_ok=True)

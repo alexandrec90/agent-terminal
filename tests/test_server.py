@@ -160,6 +160,12 @@ def test_a_page_says_hello_and_hears_the_projects(backend):
                 second = json.loads((await socket.receive(timeout=5)).data)
         assert first["type"] == "projects"
         assert [p["name"] for p in first["projects"]] == ["demo"]
-        assert second == {"type": "state", "active_id": None, "tabs": [], "prs": []}
+        assert second == {
+            "type": "state",
+            "active_id": None,
+            "tabs": [],
+            "group_order": [],
+            "prs": [],
+        }
 
     asyncio.run(body())

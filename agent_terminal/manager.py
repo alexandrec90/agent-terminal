@@ -6,13 +6,15 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agent_terminal import agents, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit
+from agent_terminal.groups import Groups, open_folders, successor
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
-from agent_terminal.projects import list_projects
+from agent_terminal.project_requests import ProjectRequests
 from agent_terminal.prs import Gh
 from agent_terminal.pty_session import Kill, Spawn, conpty_spawn, kill_tree
 from agent_terminal.runner import RunnerEvents, TabRunner
@@ -44,6 +46,7 @@ class TabManager:
         self._desktop = desktop or Desktop()
         self._tabs: list[Tab] = []
         self._active_id: str | None = None
+        self._groups = Groups(self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
         self._saver = DebouncedSaver(loop, settings.state_file, self._snapshot)
@@ -63,10 +66,18 @@ class TabManager:
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
         self._pr_requests = PrRequests(self.board, gh, loop, emit)
-        self._handlers = {
+        self._projects = ProjectRequests(
+            settings, emit, loop, self._desktop, gh, lambda: open_folders(self._tabs)
+        )
+        self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {
             "hello": self._on_hello,
             "create": self._on_create,
-            "close": self._on_close,
+            "close": lambda message: self._close_tabs([self._tab(message["id"])]),
+            # Its PRs go too: a group with nothing but PRs is closed by hiding it.
+            "close_group": lambda message: self._close_tabs(
+                self._groups.close(message, self._tabs)
+            ),
+            "fold_group": self._groups.on_fold,
             "activate": self._on_activate,
             "toggle_park": self._on_toggle_park,
             "input": self._on_input,
@@ -75,6 +86,7 @@ class TabManager:
             "pr_resume": self._on_pr_resume,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **self._projects.handlers(),
         }
 
     async def handle(self, message: dict[str, Any]) -> None:
@@ -91,8 +103,7 @@ class TabManager:
 
     async def _on_hello(self, message: dict[str, Any]) -> None:
         self._size = (int(message["rows"]), int(message["cols"]))
-        projects = list_projects(self._settings.projects_root)
-        self._emit({"type": "projects", "projects": [p.to_dict() for p in projects]})
+        self._projects.send_projects()
         if self._restored:
             self._emit_state()
             return
@@ -129,6 +140,7 @@ class TabManager:
     async def _open(self, tab: Tab) -> None:
         self._tabs.append(tab)
         self._active_id = tab.id
+        self._groups.opened(tab.project_path)
         self.runner.add(tab)
         self._on_changed()
         await self.runner.start(tab, self._size)
@@ -144,16 +156,15 @@ class TabManager:
             return
         await self._open(tab)
 
-    async def _on_close(self, message: dict[str, Any]) -> None:
-        tab = self._tab(message["id"])
-        index = self._tabs.index(tab)
-        self._tabs.remove(tab)
-        if self._active_id == tab.id:
-            neighbour = self._tabs[min(index, len(self._tabs) - 1)] if self._tabs else None
-            self._active_id = neighbour.id if neighbour else None
-        stopping = self._loop.create_task(self.runner.close(tab.id))
+    async def _close_tabs(self, leaving: list[Tab]) -> None:
+        """Close one tab, or a group's at once. The active tab, if leaving, hands over to
+        the nearest tab left, the next one first."""
+        self._active_id = successor(self._tabs, self._active_id, leaving)
+        gone = {tab.id for tab in leaving}
+        self._tabs = [tab for tab in self._tabs if tab.id not in gone]
+        stopping = [self._loop.create_task(self.runner.close(tab_id)) for tab_id in gone]
         self._on_changed()
-        await stopping
+        await asyncio.gather(*stopping)
 
     async def _on_activate(self, message: dict[str, Any]) -> None:
         self._active_id = self._tab(message["id"]).id
@@ -212,15 +223,23 @@ class TabManager:
                 "active_id": self._active_id,
                 "tabs": tabs,
                 "prs": self.board.plain_prs(),
+                **self._groups.fields(),
             }
         )
 
     def _snapshot(self) -> Snapshot:
-        return Snapshot(tabs=self._tabs, active_id=self._active_id)
+        groups = self._groups.fields()
+        return Snapshot(
+            tabs=self._tabs,
+            active_id=self._active_id,
+            folded=groups["folded"],
+            hidden=groups["hidden"],
+        )
 
     async def _restore(self) -> None:
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
+        self._groups.restore(snapshot.folded, snapshot.hidden)
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None
         self._active_id = snapshot.active_id if snapshot.active_id in ids else fallback

@@ -172,6 +172,7 @@ class App:
         self.claude_config = base / "claude.json"
         self.gh_state = base / "fake-gh.json"
         self.gh_log = base / "fake-gh.log"
+        self.gh_repos = base / "fake-gh-repos.json"
         self.port = free_port()
         self.real_agents = real_agents
         self.process: subprocess.Popen[bytes] | None = None
@@ -195,6 +196,7 @@ class App:
             env["AGENT_TERMINAL_PR_POLL_SECONDS"] = "1"
             env["FAKE_GH_STATE"] = str(self.gh_state)
             env["FAKE_GH_LOG"] = str(self.gh_log)
+            env["FAKE_GH_REPOS"] = str(self.gh_repos)
             env.update(GIT_IDENTITY)
         return env
 

@@ -98,6 +98,7 @@ class Rig:
         self.clipboard = ""
         self.picked: str | None = None
         self.killed: list[int] = []
+        self.recycled: list[Path] = []
         self.manager = TabManager(
             self.settings,
             self.messages.append,
@@ -109,6 +110,7 @@ class Rig:
                 lambda: self.clipboard,
                 self.set_clipboard,
                 lambda: self.picked,
+                self.recycled.append,
             ),
         )
 
@@ -419,7 +421,126 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "close", "id": tab["id"]})
-    assert rig.state() == {"type": "state", "active_id": None, "tabs": [], "prs": []}
+    assert rig.state() == {
+        "type": "state",
+        "active_id": None,
+        "tabs": [],
+        "prs": [],
+        "folded": [],
+        "hidden": [],
+    }
+
+
+@run
+async def test_closing_a_group_closes_only_its_tabs(rig):
+    await rig.hello()
+    first = await rig.create(rig.plain)
+    await rig.create()
+    await rig.create()
+    last = await rig.create(rig.plain)
+    group = rig.tabs()[1]["project_path"]
+    await rig.manager.handle({"type": "close_group", "path": group})
+    assert [t["id"] for t in rig.tabs()] == [first["id"], last["id"]]
+    assert sorted(rig.killed) == [100, 100]
+    assert rig.state()["active_id"] == last["id"]
+
+
+@run
+async def test_closing_the_active_group_hands_over_to_the_next_tab(rig):
+    await rig.hello()
+    before = await rig.create(rig.plain)
+    doomed = await rig.create()
+    await rig.create()
+    after = await rig.create(rig.plain)
+    await rig.manager.handle({"type": "activate", "id": doomed["id"]})
+    await rig.manager.handle({"type": "close_group", "path": doomed["project_path"]})
+    assert rig.state()["active_id"] == after["id"]
+    await rig.manager.handle({"type": "activate", "id": before["id"]})
+    assert [t["id"] for t in rig.tabs()] == [before["id"], after["id"]]
+
+
+@run
+async def test_closing_the_last_group_leaves_nothing_active(rig):
+    await rig.hello()
+    before = await rig.create(rig.plain)
+    doomed = await rig.create()
+    await rig.manager.handle({"type": "close_group", "path": doomed["project_path"]})
+    assert rig.state()["active_id"] == before["id"]
+    await rig.manager.handle({"type": "close_group", "path": before["project_path"]})
+    assert rig.state()["active_id"] is None
+
+
+@run
+async def test_a_closed_group_stays_hidden_until_a_session_opens_there(rig):
+    await rig.hello()
+    path = str(rig.repo.resolve())
+    await rig.manager.handle({"type": "close_group", "path": path})
+    assert rig.state()["hidden"] == [path]
+    await rig.create()
+    assert rig.state()["hidden"] == []
+
+
+@run
+async def test_a_group_folds_and_unfolds(rig):
+    await rig.hello()
+    tab = await rig.create()
+    path = tab["project_path"]
+    await rig.manager.handle({"type": "fold_group", "path": path, "folded": True})
+    assert rig.state()["folded"] == [path]
+    assert len(rig.tabs()) == 1
+    await rig.manager.handle({"type": "fold_group", "path": path, "folded": False})
+    assert rig.state()["folded"] == []
+
+
+@run
+async def test_a_new_session_unfolds_its_group(rig):
+    await rig.hello()
+    tab = await rig.create()
+    await rig.manager.handle({"type": "fold_group", "path": tab["project_path"], "folded": True})
+    await rig.create()
+    assert rig.state()["folded"] == []
+
+
+@run
+async def test_folded_and_hidden_groups_survive_a_restart(rig):
+    await rig.hello()
+    await rig.manager.handle({"type": "fold_group", "path": "C:\\a", "folded": True})
+    await rig.manager.handle({"type": "close_group", "path": "C:\\b"})
+    await rig.manager.shutdown()
+    saved = load_snapshot(rig.settings.state_file)
+    assert (saved.folded, saved.hidden) == (["C:\\a"], ["C:\\b"])
+
+    again = TabManager(rig.settings, rig.messages.append, rig.loop, spawn=rig.spawn)
+    await again.handle({"type": "hello", "rows": 30, "cols": 100})
+    assert (rig.state()["folded"], rig.state()["hidden"]) == (["C:\\a"], ["C:\\b"])
+
+
+@pytest.mark.parametrize("kind", ["close_group", "fold_group"])
+def test_a_group_message_without_a_path_is_dropped(tmp_path, kind):
+    async def body():
+        rig = Rig(tmp_path, asyncio.get_running_loop())
+        await rig.hello()
+        await rig.manager.handle({"type": kind, "path": 7, "folded": True})
+        assert (rig.state()["folded"], rig.state()["hidden"]) == ([], [])
+
+    asyncio.run(body())
+
+
+@run
+async def test_a_project_with_a_tab_is_not_deleted(rig):
+    await rig.hello()
+    await rig.create()
+    await rig.manager.handle({"type": "delete_project", "path": str(rig.repo)})
+    deleted = next(m for m in rig.messages if m["type"] == "deleted")
+    assert "close it first" in deleted["error"]
+    assert rig.recycled == []
+
+
+@run
+async def test_a_project_without_one_is(rig):
+    await rig.hello()
+    await rig.manager.handle({"type": "delete_project", "path": str(rig.plain)})
+    assert rig.recycled == [rig.plain.resolve()]
 
 
 @run

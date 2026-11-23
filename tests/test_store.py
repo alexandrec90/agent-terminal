@@ -10,6 +10,7 @@ from agent_terminal.store import (
     Tab,
     load_snapshot,
     parse_snapshot,
+    paths_of,
     save_snapshot,
     tab_from_dict,
 )
@@ -75,6 +76,41 @@ def test_parse_refuses_what_it_cannot_trust(text):
 def test_a_non_string_active_id_is_dropped():
     text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "active_id": 7})
     assert parse_snapshot(text).active_id is None
+
+
+def test_folded_and_hidden_groups_round_trip(tmp_path):
+    path = tmp_path / "state.json"
+    snapshot = Snapshot(folded=["C:\\a"], hidden=["C:\\b", "C:\\c"])
+    save_snapshot(path, snapshot)
+    assert load_snapshot(path) == snapshot
+
+
+def test_a_file_from_before_groups_were_kept_has_none():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "active_id": None})
+    snapshot = parse_snapshot(text)
+    assert (snapshot.folded, snapshot.hidden) == ([], [])
+
+
+def test_odd_group_lists_cost_the_groups_not_the_tabs():
+    text = json.dumps(
+        {
+            "version": SCHEMA_VERSION,
+            "tabs": [make_tab().to_dict()],
+            "folded": "C:\\a",
+            "hidden": [1, "C:\\b"],
+        }
+    )
+    snapshot = parse_snapshot(text)
+    assert snapshot.tabs == [make_tab()]
+    assert (snapshot.folded, snapshot.hidden) == ([], ["C:\\b"])
+
+
+@pytest.mark.parametrize(
+    ("saved", "read"),
+    [(["C:\\a"], ["C:\\a"]), (None, []), ("C:\\a", []), ({"C:\\a": 1}, []), ([1, None], [])],
+)
+def test_paths_of(saved, read):
+    assert paths_of(saved) == read
 
 
 def test_a_key_from_another_version_is_ignored():

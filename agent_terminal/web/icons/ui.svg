@@ -74,7 +74,13 @@
     <symbol id="close" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M4 4l8 8M12 4l-8 8"/>
     </symbol>
-    <symbol id="folder" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <symbol id="chevron" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 6l4 4 4-4"/>
+    </symbol>
+    <symbol id="trash" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10"/>
+    </symbol>
+    <symbol id="folder"viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2 3h5l2 2h5v8H2z"/>
     </symbol>
     <symbol id="terminal" viewBox="-.5 -.5 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">

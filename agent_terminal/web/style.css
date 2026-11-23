@@ -582,6 +582,47 @@ legend {
   outline: 2px solid var(--accent);
 }
 
+/* A group's sessions no tab has open. */
+#resume-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.past-session {
+  display: flex;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--panel-raised);
+  text-align: left;
+}
+
+.past-session:hover {
+  outline: 1px solid var(--muted);
+}
+
+.past-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.past-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tab-chip.deploy {
+  color: var(--muted);
+}
+
+.tab-chip.deploy.deployed {
+  background: #14392a;
+  color: var(--working);
+}
+
 .choices {
   display: grid;
   grid-template-columns: 1fr 1fr;

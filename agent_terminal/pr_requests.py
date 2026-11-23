@@ -26,11 +26,13 @@ class PrRequests:
         gh: Gh,
         loop: asyncio.AbstractEventLoop,
         emit: Callable[[dict[str, Any]], None],
+        resume: Callable[[Tab], Awaitable[None]],
     ) -> None:
         self._board = board
         self._gh = gh
         self._loop = loop
         self._emit = emit
+        self._resume = resume
 
     def handlers(self) -> dict[str, Handler]:
         """The message types answered here."""
@@ -38,7 +40,12 @@ class PrRequests:
             "pr_view": self._on_view,
             "pr_merge": self._on_merge,
             "pr_close": self._on_close,
+            "pr_resume": self._on_resume,
         }
+
+    async def _on_resume(self, message: dict[str, Any]) -> None:
+        """Bring a PR's session back as a tab, or go to the tab that already has it."""
+        await self._resume(self.tab_for_prompt(message))
 
     def _target(self, message: dict[str, Any]) -> tuple[Path, int]:
         """The repository and PR a message names. Only a repository the board knows is

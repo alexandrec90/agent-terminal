@@ -27,7 +27,7 @@ LIST_LIMIT = "50"
 MAX_DIFF_CHARACTERS = 2_000_000
 LIST_FIELDS = (
     "number,title,url,state,headRefName,baseRefName,isDraft,author,statusCheckRollup,"
-    "reviewDecision,mergeable,mergeStateStatus,labels"
+    "reviewDecision,mergeable,mergeStateStatus,labels,mergeCommit"
 )
 DETAIL_FIELDS = f"{LIST_FIELDS},body,additions,deletions,changedFiles,comments"
 
@@ -67,6 +67,8 @@ class PullRequest:
     mergeable: str
     review: str
     automerge: bool
+    # Set once merged: what the main checkout must contain to be running the change.
+    merge_commit: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,6 +111,7 @@ def to_pull_request(record: Mapping[str, Any]) -> PullRequest:
         mergeable=str(record.get("mergeable") or ""),
         review=str(record.get("reviewDecision") or ""),
         automerge="automerge" in labels,
+        merge_commit=str((record.get("mergeCommit") or {}).get("oid") or ""),
     )
 
 

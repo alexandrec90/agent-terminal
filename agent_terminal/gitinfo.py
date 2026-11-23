@@ -6,6 +6,7 @@ every few seconds, for every tab, and a process each time would be felt.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,7 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 HEAD_BRANCH_PREFIX = "ref: refs/heads/"
 GITDIR_PREFIX = "gitdir:"
 FIRST_COMMIT_MESSAGE = "Initial commit"
+COMMIT_HASH = re.compile(r"[0-9a-f]{7,64}")
 
 
 class GitError(Exception):
@@ -92,6 +94,19 @@ def has_commits(folder: Path) -> bool:
     nothing to cut one from."""
     try:
         run_git(folder, "rev-parse", "--verify", "--quiet", "HEAD")
+    except GitError:
+        return False
+    return True
+
+
+def contains_commit(folder: Path, commit: str) -> bool:
+    """Whether `folder`'s HEAD has `commit` in its history. False for a commit not fetched
+    yet, and for anything that is not a hash: it arrives from GitHub and goes on a command
+    line, where a leading `-` would be read as an option."""
+    if not COMMIT_HASH.fullmatch(commit):
+        return False
+    try:
+        run_git(folder, "merge-base", "--is-ancestor", commit, "HEAD")
     except GitError:
         return False
     return True

@@ -35,6 +35,8 @@ const dialog = new NewTabDialog({
   inspect: (path) => send({ type: "inspect_folder", path }),
   browse: () => send({ type: "pick_folder" }),
   prepare: (path) => send({ type: "prepare_worktree", path }),
+  listPast: (path) => send({ type: "past_sessions", path }),
+  resume: (choice) => send({ type: "resume_session", ...choice }),
 });
 
 const review = new ReviewPanel(document.getElementById("review"), {
@@ -107,6 +109,9 @@ function onMessage(message) {
       break;
     case "folder":
       dialog.setFolder(message);
+      break;
+    case "past_sessions":
+      dialog.setPastSessions(message);
       break;
     case "picked":
       dialog.setPicked(message.path);

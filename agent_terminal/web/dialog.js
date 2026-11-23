@@ -1,6 +1,9 @@
-// The new-session dialog. A group's "+" arrives with the folder fixed; otherwise any folder
-// can be chosen: a project, a typed path, or the native picker. Agent and worktree are
-// chosen either way. Whatever would stop a start is said here, before it happens.
+// The new-session dialog. A group's "+" arrives with the folder fixed, and offers the
+// project's unopened sessions to resume first; otherwise any folder can be chosen: a
+// project, a typed path, or the native picker. Agent and worktree are chosen either way.
+// Whatever would stop a start is said here, before it happens.
+
+import { renderPastSessions } from "./past.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
 const TYPING_PAUSE_MS = 250;
@@ -15,9 +18,12 @@ function trustNote(agent, worktree) {
 }
 
 export class NewTabDialog {
-  constructor({ start, inspect, browse, prepare }) {
-    this.requests = { start, inspect, browse, prepare };
+  constructor({ start, inspect, browse, prepare, listPast, resume }) {
+    this.requests = { start, inspect, browse, prepare, listPast, resume };
     this.projects = [];
+    this.fixed = null;
+    this.resumeField = document.getElementById("resume-field");
+    this.resumeList = document.getElementById("resume-list");
     this.requested = null;
     this.folder = null;
     this.error = "";
@@ -69,9 +75,16 @@ export class NewTabDialog {
 
   // `fixed` is a group's folder, as { path, name }; without one, any folder can be chosen.
   open(fixed = null) {
+    this.fixed = fixed;
     this.worktree.checked = false;
     this.pathInput.value = "";
     this.projectField.hidden = fixed !== null;
+    // Only a group has a project to look in for its other sessions.
+    this.resumeField.hidden = fixed === null;
+    if (fixed) {
+      this.renderPast(null);
+      this.requests.listPast(fixed.path);
+    }
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
     this.renderProjects();
     this.choose(fixed?.path ?? "");
@@ -115,6 +128,20 @@ export class NewTabDialog {
     if (!this.dialog.open) return;
     this.pathInput.value = path;
     this.choose(path);
+  }
+
+  // The backend's list of a group's unopened sessions; it may come twice, the second time
+  // with what GitHub said. One for another group, or a closed dialog, is ignored.
+  setPastSessions(message) {
+    if (!this.dialog.open || message.requested !== this.fixed?.path) return;
+    this.renderPast(message.sessions);
+  }
+
+  renderPast(sessions) {
+    renderPastSessions(this.resumeList, sessions, Date.now() / 1000, (session) => {
+      this.requests.resume({ path: this.fixed.path, session_id: session.session_id });
+      this.dialog.close();
+    });
   }
 
   // The backend's answer about a folder. One for a path since replaced is ignored.

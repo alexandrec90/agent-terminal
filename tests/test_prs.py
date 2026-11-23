@@ -96,11 +96,18 @@ class TestParsing:
         assert pr.author == "someone"
         assert pr.checks == CHECKS_PASSING
         assert pr.automerge is True
+        assert pr.merge_commit == ""
+
+    def test_a_merged_record_names_its_merge_commit(self):
+        # As `gh pr list --json mergeCommit` gives it for a merged PR (gh 2.98).
+        merged = {**RECORD, "state": "MERGED", "mergeCommit": {"oid": "58f7c7c9" * 5}}
+        assert to_pull_request(merged).merge_commit == "58f7c7c9" * 5
 
     def test_tolerates_what_gh_leaves_empty(self):
         sparse = {k: RECORD[k] for k in ("number", "title", "url", "state", "headRefName")}
-        pr = to_pull_request({**sparse, "author": None, "labels": None})
+        pr = to_pull_request({**sparse, "author": None, "labels": None, "mergeCommit": None})
         assert (pr.author, pr.base, pr.draft, pr.automerge) == ("", "", False, False)
+        assert pr.merge_commit == ""
 
     def test_a_list_reply(self):
         assert [p.number for p in parse_pull_requests(json.dumps([RECORD]))] == [505]

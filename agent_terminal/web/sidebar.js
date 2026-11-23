@@ -19,7 +19,7 @@ const SVG = "http://www.w3.org/2000/svg";
 
 // One of the interface icons, colored by the CSS `color` of whatever holds it. Drawn for
 // 16px: `.icon` keeps it there.
-function icon(name) {
+export function icon(name) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("class", "icon");
   svg.setAttribute("aria-hidden", "true");
@@ -90,7 +90,7 @@ function tabMeta(tab) {
   return parts.join(" · ");
 }
 
-function span(className, text) {
+export function span(className, text) {
   const element = document.createElement("span");
   element.className = className;
   element.textContent = text;
@@ -99,7 +99,7 @@ function span(className, text) {
 
 // The icon says where the PR stands; the text says which PR, and names any state the
 // icon alone would leave a guess.
-function prChipFace(pr) {
+export function prChipFace(pr) {
   if (pr.state === "MERGED") return ["pr-merged", `PR #${pr.number} merged`];
   if (pr.state === "CLOSED") return ["pr-closed", `PR #${pr.number} closed`];
   if (pr.mergeable === "CONFLICTING") return ["conflict", `PR #${pr.number} conflicts`];
@@ -120,7 +120,7 @@ function prChip(pr, actions) {
   return chip;
 }
 
-function shipChip(ship) {
+export function shipChip(ship) {
   const refused = ship === "refused";
   const chip = span(`tab-chip ship ${ship}`, "");
   chip.append(icon("ship"), refused ? "ship refused" : "ship queued");

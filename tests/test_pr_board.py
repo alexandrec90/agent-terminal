@@ -94,10 +94,14 @@ class Rig:
         self.board = PrBoard(
             self.settings, loop, BoardLinks(lambda: self.tabs, self.note_change), self.gh
         )
-        self.requests = PrRequests(self.board, self.gh, loop, self.messages.append)
+        self.resumed: list[Tab] = []
+        self.requests = PrRequests(self.board, self.gh, loop, self.messages.append, self.resume)
 
     def note_change(self) -> None:
         self.changes += 1
+
+    async def resume(self, tab: Tab) -> None:
+        self.resumed.append(tab)
 
     def worktree(self, name: str) -> Path:
         tree = self.repository / ".claude" / "worktrees" / name
@@ -303,6 +307,10 @@ async def test_a_tab_for_a_prs_prompt_resumes_it_in_its_worktree(rig):
     assert Path(tab.cwd) == tree
     assert tab.title == "PR 7"
     assert Path(tab.project_path) == rig.key()
+
+    # The message itself hands that tab on, to be opened or shown.
+    await rig.requests.handlers()["pr_resume"](rig.message("pr_resume", 7))
+    assert [t.session_id for t in rig.resumed] == ["session-1"]
 
 
 @run

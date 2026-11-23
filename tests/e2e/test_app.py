@@ -506,6 +506,47 @@ def test_a_prs_prompt_can_be_reopened_from_its_worktree(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_a_groups_plus_offers_its_unopened_sessions_with_their_state(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        alpha = tmp_path / "projects" / "alpha"
+        tree = alpha / ".claude" / "worktrees" / "earlier"
+        git(alpha, "worktree", "add", str(tree), "-b", "worktree-earlier")
+        encoded = "".join(c if c.isalnum() else "-" for c in str(tree))
+        transcript = tmp_path / "claude-home" / "projects" / encoded / "earlier-session.jsonl"
+        transcript.parent.mkdir(parents=True)
+        title = {"type": "ai-title", "aiTitle": "Earlier <b>work</b>", "sessionId": "x"}
+        transcript.write_text(json.dumps(title) + "\n", encoding="utf-8")
+        (tree / "logs").mkdir()
+        (tree / "logs" / "ship-intent.md").write_text("Ship it\n", encoding="utf-8")
+        write_prs(app, make_pr(12, "worktree-earlier"))
+        first = await open_tab(window, "alpha")
+        await window.wait("window.__agentTerminal.tabs()[0].session_id !== null", "an id")
+
+        await window.click('[data-project="alpha"] .group-add')
+        row = "document.querySelector('.past-session[data-session=\"earlier-session\"]')"
+        await window.wait(f"{row}?.textContent?.includes('PR #12')", "the session and its PR")
+        # The title is text, never markup; the state reads intent, then PR.
+        assert await window.js(f"{row}.querySelector('.tab-title').textContent") == (
+            "Earlier <b>work</b>"
+        )
+        chips = f"[...{row}.querySelectorAll('.tab-chip')].map(c => c.textContent)"
+        assert await window.js(chips) == ["ship queued", "PR #12"]
+        # The tab already open is not offered.
+        own = (await window.tabs())[0]["session_id"]
+        assert await window.js(f"!!document.querySelector('[data-session=\"{own}\"]')") is False
+
+        await window.js(f"{row}.click()")
+        await window.wait("window.__agentTerminal.tabs().length === 2", "the resumed tab")
+        await window.wait("!document.getElementById('new-tab').open", "the dialog to close")
+        await wait_launches(app, 2)
+        launch = launches(app)[-1]
+        assert launch["argv"] == ["--resume", "earlier-session"]
+        assert Path(launch["cwd"]) == tree
+        assert first in {tab["id"] for tab in await window.tabs()}
+
+    scenario(tmp_path, body)
+
+
 def test_closing_the_window_brings_every_tab_back(tmp_path):
     async def run() -> None:
         make_projects(tmp_path)

@@ -126,6 +126,7 @@ function onMessage(message) {
 window.__agentTerminal = {
   ready: () => synced,
   screen: (id) => terminals.screenText(id),
+  promptShade: (id) => terminals.promptShade(id),
   send,
   tabs: () => tabs,
   prs: () => prs,

@@ -16,6 +16,7 @@ from pathlib import Path
 ESC = "\x1b"
 ST = f"{ESC}\\"
 REPLY_TIMEOUT_SECONDS = 5
+PROMPT = "\N{HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT}"
 
 
 def emit(text: str) -> None:
@@ -82,6 +83,14 @@ def pass_trust_screen() -> bool:
     return True
 
 
+def compose() -> None:
+    """Claude Code 2.1.331's input box: a rule, the prompt line, a rule, a footer, and the
+    cursor put back on the prompt. No background is painted, as Claude paints none."""
+    rule = "─" * 60
+    emit(f"{rule}\r\n{PROMPT}\N{NO-BREAK SPACE}{ESC}[2mTry something{ESC}[22m\r\n{rule}\r\n")
+    emit(f"  ⏵⏵ bypass permissions on{ESC}[2A{ESC}[3G")
+
+
 def main() -> int:
     record_launch()
     emit(f"{ESC}]0;fake session{ESC}\\")
@@ -106,6 +115,8 @@ def main() -> int:
             status("done")
         elif command == "work":
             status("working")
+        elif command == "compose":
+            compose()
         elif command == "quit":
             status("working")
             emit(f"{ESC}]7501;state=clear{ST}")

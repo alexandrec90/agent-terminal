@@ -126,6 +126,7 @@ function onMessage(message) {
 window.__agentTerminal = {
   ready: () => synced,
   screen: (id) => terminals.screenText(id),
+  mouseMode: (id) => terminals.mouseMode(id),
   send,
   tabs: () => tabs,
   prs: () => prs,

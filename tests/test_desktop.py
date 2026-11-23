@@ -8,6 +8,7 @@ import pytest
 from agent_terminal.__main__ import APP_ICON, BACKGROUND, FolderPicker, run_window
 from agent_terminal.desktop import Desktop, DesktopRequests, no_picker
 from agent_terminal.settings import Settings
+from agent_terminal.taskbar import brand_window
 
 
 def make_requests(tmp_path, loop, desktop: Desktop) -> tuple[DesktopRequests, list[dict[str, Any]]]:
@@ -156,6 +157,12 @@ class TestRunWindow:
     def test_the_window_wears_the_app_icon(self, webview):
         run_window("http://127.0.0.1:1/", FolderPicker())
         assert webview.started["icon"] == str(APP_ICON)
+
+    def test_the_window_is_given_its_taskbar_identity_once_running(self, webview):
+        picker = FolderPicker()
+        run_window("http://127.0.0.1:1/", picker)
+        assert webview.started["func"] is brand_window
+        assert webview.started["args"] == ("the window", APP_ICON)
 
     def test_the_app_icon_is_where_the_window_looks(self):
         """pywebview skips an icon path that is not a file, silently."""

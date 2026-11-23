@@ -203,12 +203,14 @@ async def test_create_uses_the_size_the_page_reported(rig):
 
 
 @run
-async def test_a_claude_worktree_tab_names_its_worktree(rig):
+async def test_a_claude_worktree_tab_lets_claude_name_it(rig):
     rig.make_repository()
     await rig.hello()
     tab = await rig.create(worktree=True)
     assert tab["worktree"] is True
-    assert f"'--worktree' '{tab['worktree_name']}'" in rig.processes[0].command()
+    assert "worktree_name" not in tab
+    expected = f"& 'claude' '--session-id' '{tab['session_id']}' '--worktree';"
+    assert rig.processes[0].command().startswith(expected)
 
 
 @run
@@ -677,8 +679,8 @@ async def test_accepting_trust_loops_back_to_the_worktree(rig):
     await rig.output(tab["id"], status("idle"))
     await settle(lambda: len(rig.processes) == 2)
 
-    assert f"'--worktree' '{tab['worktree_name']}'" in rig.processes[1].command()
-    assert f"'--session-id' '{tab['session_id']}'" in rig.processes[1].command()
+    expected = f"& 'claude' '--session-id' '{tab['session_id']}' '--worktree';"
+    assert rig.processes[1].command().startswith(expected)
     assert {"type": "reset", "id": tab["id"]} in rig.messages
     assert rig.tabs()[0]["id"] == tab["id"]
     assert rig.tabs()[0]["awaiting_trust"] is False

@@ -113,7 +113,6 @@ class TabManager:
         # A worktree is the repository's, whichever of its folders the user chose: that
         # is where `claude -w` makes it from, and so where the tab finds it again.
         scope = gitinfo.main_checkout(folder) or folder if worktree else folder
-        session_id, worktree_name = agents.new_tab_identity(agent, worktree)
         tab = Tab(
             id=uuid.uuid4().hex,
             project=folders.display_name(scope),
@@ -121,8 +120,7 @@ class TabManager:
             agent=agent,
             created_at=time.time(),
             worktree=worktree,
-            worktree_name=worktree_name,
-            session_id=session_id,
+            session_id=agents.new_session_id(agent),
         )
         await self._open(tab)
 

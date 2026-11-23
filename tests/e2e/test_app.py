@@ -293,6 +293,35 @@ def test_a_session_can_be_scoped_to_any_folder(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_the_dialog_holds_its_size_and_shows_the_whole_selection(tmp_path):
+    rect = "document.getElementById({}).getBoundingClientRect()"
+
+    async def body(_app: App, window: Window) -> None:
+        repository = tmp_path / "untrusted"
+        make_repository(repository)
+        await window.click("#new-group")
+        before = await window.js(f"{rect.format(json.dumps('new-tab'))}.toJSON()")
+
+        await window.type_path(str(repository))
+        await window.wait("!document.getElementById('folder-notes').hidden", "the trust note")
+        after = await window.js(f"{rect.format(json.dumps('new-tab'))}.toJSON()")
+        assert (after["top"], after["height"]) == (before["top"], before["height"])
+
+        # The list scrolls, so it clips: the selected outline (2px) must fit inside it.
+        await window.js("document.getElementById('new-tab').close()")
+        await window.choose_project("alpha")
+        fits = await window.js(
+            "(() => { const list = document.getElementById('project-list')"
+            ".getBoundingClientRect();"
+            "const b = document.querySelector('.project.selected').getBoundingClientRect();"
+            "return b.left - 2 >= list.left && b.right + 2 <= list.right"
+            " && b.top - 2 >= list.top; })()"
+        )
+        assert fits is True
+
+    scenario(tmp_path, body)
+
+
 def test_a_first_visit_asks_for_trust_then_loops_back_to_the_worktree(tmp_path):
     async def body(app: App, window: Window) -> None:
         repository = tmp_path / "untrusted"

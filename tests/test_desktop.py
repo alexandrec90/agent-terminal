@@ -5,7 +5,15 @@ from typing import Any
 
 import pytest
 
-from agent_terminal.__main__ import APP_ICON, BACKGROUND, FolderPicker, run_window
+import agent_terminal.__main__ as main_module
+from agent_terminal.__main__ import (
+    APP_ICON,
+    APP_ID,
+    BACKGROUND,
+    FolderPicker,
+    claim_taskbar_identity,
+    run_window,
+)
 from agent_terminal.desktop import Desktop, DesktopRequests, no_picker
 from agent_terminal.settings import Settings
 
@@ -160,3 +168,49 @@ class TestRunWindow:
     def test_the_app_icon_is_where_the_window_looks(self):
         """pywebview skips an icon path that is not a file, silently."""
         assert APP_ICON.is_file()
+
+    def test_the_taskbar_identity_is_claimed_before_the_window_exists(self, webview, monkeypatch):
+        """Without its own AppUserModelID the taskbar groups the window under pythonw.exe
+        and shows Python's icon, whatever icon the window itself wears."""
+        order: list[str] = []
+        monkeypatch.setattr(main_module, "claim_taskbar_identity", lambda: order.append("app id"))
+        create = webview.create_window
+
+        def create_window(*args, **options):
+            order.append("window")
+            return create(*args, **options)
+
+        monkeypatch.setattr(webview, "create_window", create_window)
+        run_window("http://127.0.0.1:1/", FolderPicker())
+        assert order == ["app id", "window"]
+
+
+class FakeShell32:
+    def __init__(self, result: int = 0) -> None:
+        self.result = result
+        self.ids: list[str] = []
+
+    def SetCurrentProcessExplicitAppUserModelID(self, app_id: str) -> int:
+        self.ids.append(app_id)
+        return self.result
+
+
+class TestClaimTaskbarIdentity:
+    def test_sets_the_app_id_on_windows(self, monkeypatch):
+        shell32 = FakeShell32()
+        monkeypatch.setattr(
+            main_module.ctypes, "windll", type("windll", (), {"shell32": shell32}), raising=False
+        )
+        assert claim_taskbar_identity() is True
+        assert shell32.ids == [APP_ID]
+
+    def test_a_refused_call_is_reported_not_raised(self, monkeypatch):
+        shell32 = FakeShell32(result=-2147024809)  # E_INVALIDARG
+        monkeypatch.setattr(
+            main_module.ctypes, "windll", type("windll", (), {"shell32": shell32}), raising=False
+        )
+        assert claim_taskbar_identity() is False
+
+    def test_does_nothing_where_there_is_no_windll(self, monkeypatch):
+        monkeypatch.delattr(main_module.ctypes, "windll", raising=False)
+        assert claim_taskbar_identity() is False

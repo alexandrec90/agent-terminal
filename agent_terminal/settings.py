@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     # GitHub moves slowly here: the fix pass runs every half hour. A poll of `gh` per
     # repository a minute is 700-odd requests an hour across a dozen, of 5000 allowed.
     pr_poll_seconds: float = 60.0
+    # Keep the tabs' processes in the session host (`host.py`), so a restart or an update
+    # leaves them running. Off, they live and die with the window, as the tests need.
+    session_host: bool = True
+    # How long the host keeps processes with no app connected before ending them.
+    host_orphan_seconds: float = 3600.0
+    # The branch the app's own checkout updates from, on `origin`.
+    update_branch: str = "main"
+    # How often to ask `origin` whether there is an update. A fetch each time.
+    update_check_seconds: float = 1800.0
 
     @property
     def state_file(self) -> Path:
@@ -63,3 +72,30 @@ class Settings(BaseSettings):
     @property
     def lock_file(self) -> Path:
         return self.data_dir / "agent-terminal.lock"
+
+    @property
+    def pid_file(self) -> Path:
+        """The running app's pid, for whatever has to find its window."""
+        return self.data_dir / "agent-terminal.pid"
+
+    @property
+    def host_address_file(self) -> Path:
+        return self.data_dir / "host.json"
+
+    @property
+    def host_lock_file(self) -> Path:
+        return self.data_dir / "host.lock"
+
+    @property
+    def host_log_file(self) -> Path:
+        return self.data_dir / "host.log"
+
+    @property
+    def update_result_file(self) -> Path:
+        """How the last update went, for the app it started to show."""
+        return self.data_dir / "update-result.json"
+
+    @property
+    def update_log_file(self) -> Path:
+        """Everything git and uv said during the last update."""
+        return self.data_dir / "update.log"

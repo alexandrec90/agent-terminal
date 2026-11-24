@@ -11,14 +11,19 @@ import json
 import logging
 import secrets
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
 from agent_terminal.desktop import Desktop
+from agent_terminal.host_client import HostSessions
 from agent_terminal.manager import TabManager
+from agent_terminal.relaunch import launch_relaunch
+from agent_terminal.sessions import LocalSessions
 from agent_terminal.settings import Settings
+from agent_terminal.updates import AppControl
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +64,9 @@ class Backend:
         settings: Settings,
         web_root: Path = WEB_ROOT,
         desktop: Desktop | None = None,
+        close_window: Callable[[], None] | None = None,
+        checkout: Path | None = None,
+        relaunch: Callable[[Settings, Path, bool], int] = launch_relaunch,
     ) -> None:
         self._settings = settings
         self._web_root = web_root
@@ -69,8 +77,28 @@ class Backend:
         self._ready = threading.Event()
         self._port = 0
         self._outbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._hosted = HostSessions(settings, self._loop) if settings.session_host else None
+        sessions = self._hosted or LocalSessions()
+        self._close_window = close_window
+        self._checkout = checkout
+        self._relaunch = relaunch
+        # Set by a restart that keeps the processes: `stop` then leaves them running.
+        self._keep_sessions = False
+        self._control = AppControl(
+            settings,
+            self._outbox.put_nowait,
+            self._loop,
+            sessions.status,
+            self.request_restart,
+            checkout=checkout,
+        )
         self._manager = TabManager(
-            settings, self._outbox.put_nowait, self._loop, desktop=desktop or Desktop()
+            settings,
+            self._outbox.put_nowait,
+            self._loop,
+            sessions=sessions,
+            desktop=desktop or Desktop(),
+            handlers=self._control.handlers(),
         )
         self._socket: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
@@ -87,7 +115,8 @@ class Backend:
         asyncio.run_coroutine_threadsafe(self._serve(), self._loop).result()
 
     def stop(self) -> None:
-        """Save the tabs and end every process."""
+        """Save the tabs and end every process, or, for a restart that keeps them, leave
+        them running in the session host."""
         future = asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
         try:
             future.result(timeout=SHUTDOWN_TIMEOUT_SECONDS)
@@ -95,7 +124,19 @@ class Backend:
             log.error("shutdown timed out; exiting anyway")
         self._loop.call_soon_threadsafe(self._loop.stop)
 
+    def request_restart(self, update: bool, keep_sessions: bool) -> None:
+        """Start the helper that brings the app back, then close the window. Runs on the
+        loop; the window's thread then calls `stop`, which honours `keep_sessions`."""
+        if self._checkout is None or self._close_window is None:
+            raise ValueError("this app cannot restart itself")
+        self._keep_sessions = keep_sessions and self._manager.sessions.status()["kept"]
+        self._relaunch(self._settings, self._checkout, update)
+        self._close_window()
+
     async def _serve(self) -> None:
+        if self._hosted is not None:
+            await self._hosted.connect()
+        self._control.start()
         app = web.Application()
         app.router.add_get("/", self._index)
         app.router.add_get("/ws", self._websocket)
@@ -111,7 +152,8 @@ class Backend:
     async def _shutdown(self) -> None:
         for task in self._slow_tasks:
             task.cancel()
-        await self._manager.shutdown()
+        self._control.stop()
+        await self._manager.shutdown(keep_processes=self._keep_sessions)
         if self._pump_task is not None:
             self._pump_task.cancel()
         if self._runner is not None:

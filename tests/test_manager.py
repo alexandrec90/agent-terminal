@@ -10,10 +10,11 @@ from typing import Any
 import pytest
 
 from agent_terminal import manager as module
-from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION, QUERY_REPLY
+from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION
 from agent_terminal.desktop import Desktop, is_web_url
 from agent_terminal.manager import TabManager
 from agent_terminal.pty_session import SpawnError
+from agent_terminal.sessions import LocalSessions, Survivor
 from agent_terminal.settings import Settings
 from agent_terminal.store import SAVE_DELAY_SECONDS, Snapshot, Tab, load_snapshot, save_snapshot
 
@@ -103,8 +104,7 @@ class Rig:
             self.settings,
             self.messages.append,
             self.loop,
-            spawn=self.spawn,
-            kill=self.killed.append,
+            sessions=LocalSessions(self.spawn, self.killed.append),
             desktop=Desktop(
                 self.opened.append,
                 lambda: self.clipboard,
@@ -320,14 +320,6 @@ def test_a_bad_message_is_dropped_without_raising(tmp_path, message):
 
 
 @run
-async def test_the_status_query_is_answered_at_once(rig):
-    await rig.hello()
-    tab = await rig.create()
-    await rig.output(tab["id"], "\x1b]7501;?\x1b\\")
-    assert rig.processes[0].written == [QUERY_REPLY]
-
-
-@run
 async def test_output_reaches_the_page_unchanged(rig):
     await rig.hello()
     tab = await rig.create()
@@ -512,7 +504,8 @@ async def test_folded_and_hidden_groups_survive_a_restart(rig):
     saved = load_snapshot(rig.settings.state_file)
     assert (saved.folded, saved.hidden) == (["C:\\a"], ["C:\\b"])
 
-    again = TabManager(rig.settings, rig.messages.append, rig.loop, spawn=rig.spawn)
+    sessions = LocalSessions(rig.spawn, rig.killed.append)
+    again = TabManager(rig.settings, rig.messages.append, rig.loop, sessions)
     await again.handle({"type": "hello", "rows": 30, "cols": 100})
     assert (rig.state()["folded"], rig.state()["hidden"]) == (["C:\\a"], ["C:\\b"])
 
@@ -721,6 +714,141 @@ async def test_shutdown_saves_and_ends_every_process(rig):
     assert saved.tabs[0].parked is True
     assert saved.active_id == tab["id"]
     assert rig.killed == [100]
+
+
+class KeptSession:
+    """A process the host held while the window was away."""
+
+    def __init__(self) -> None:
+        self.sizes: list[tuple[int, int]] = []
+        self.remembered: list[dict[str, Any]] = []
+
+    def start(self, *_: Any) -> None: ...
+    def write(self, text: str) -> None: ...
+    def close(self) -> None: ...
+
+    def resize(self, rows: int, cols: int) -> None:
+        self.sizes.append((rows, cols))
+
+    def remember(self, state: dict[str, Any]) -> None:
+        self.remembered.append(state)
+
+
+class Keeping(LocalSessions):
+    """A source that has survivors to offer, and records what is done with them."""
+
+    def __init__(self, rig: Rig, survivors: dict[str, Survivor]) -> None:
+        super().__init__(rig.spawn, rig.killed.append)
+        self.offered = survivors
+        self.kept = KeptSession()
+        self.discarded: list[str] = []
+        self.calls: list[str] = []
+
+    async def survivors(self) -> dict[str, Survivor]:
+        return dict(self.offered)
+
+    def adopt(self, survivor, on_output, on_exit):
+        return self.kept
+
+    async def discard(self, survivor: Survivor) -> None:
+        self.discarded.append(survivor.key)
+
+    async def detach(self) -> None:
+        self.calls.append("detach")
+
+    async def shutdown(self) -> None:
+        self.calls.append("shutdown")
+
+
+def keep(rig: Rig, survivors: dict[str, Survivor]) -> Keeping:
+    source = Keeping(rig, survivors)
+    rig.manager.sessions = source
+    rig.manager.runner._sessions = source
+    return source
+
+
+@run
+async def test_restore_takes_back_a_surviving_process_instead_of_resuming(rig):
+    path = str(rig.settings.projects_root / "repo")
+    tabs = [make_saved_tab(path, id="a"), make_saved_tab(path, id="b")]
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=tabs))
+    screen = "still here" + status("working")
+    source = keep(
+        rig,
+        {
+            "a": Survivor(tab_id="a", key="ka", alive=True, screen=screen, unread=screen),
+            "gone": Survivor(tab_id="gone", key="kg", alive=True),
+        },
+    )
+    await rig.hello()
+    # Only the tab with nothing to take back starts a process.
+    assert len(rig.processes) == 1
+    assert source.discarded == ["kg"]
+    kinds = [(m["type"], m.get("id")) for m in rig.messages if m["type"] in ("state", "output")]
+    assert kinds.index(("output", "a")) > kinds.index(("state", None))
+    replayed = next(m for m in rig.messages if m.get("id") == "a")
+    assert replayed["data"] == screen
+    assert replayed["replay"] is True, "the page must not answer queries in old output"
+    assert next(t for t in rig.tabs() if t["id"] == "a")["status"] == "working"
+
+
+@run
+async def test_an_adopted_process_is_redrawn_at_the_window_size(rig, monkeypatch):
+    monkeypatch.setattr("agent_terminal.runner.REDRAW_GAP_SECONDS", 0)
+    path = str(rig.settings.projects_root / "repo")
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=[make_saved_tab(path, id="a")]))
+    source = keep(rig, {"a": Survivor(tab_id="a", key="ka", alive=True)})
+    await rig.hello()
+    await asyncio.sleep(0.01)
+    assert source.kept.sizes == [(30, 99), (30, 100)]
+
+
+@run
+async def test_detach_saves_and_leaves_the_processes_running(rig):
+    path = str(rig.settings.projects_root / "repo")
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=[make_saved_tab(path, id="a")]))
+    source = keep(rig, {"a": Survivor(tab_id="a", key="ka", alive=True)})
+    await rig.hello()
+    await rig.manager.handle({"type": "toggle_park", "id": "a"})
+    await rig.manager.shutdown(keep_processes=True)
+    assert load_snapshot(rig.settings.state_file).tabs[0].parked is True
+    assert source.kept.remembered
+    assert source.calls == ["detach"]
+    assert rig.killed == []
+
+
+@run
+async def test_shutdown_ends_the_host_after_the_processes(rig):
+    source = keep(rig, {})
+    await rig.hello()
+    await rig.create()
+    await rig.manager.shutdown()
+    assert rig.killed == [100]
+    assert source.calls == ["shutdown"]
+
+
+@run
+async def test_a_resize_is_remembered_for_the_next_window(rig):
+    await rig.hello()
+    tab = await rig.create()
+    await rig.manager.handle({"type": "resize", "rows": 40, "cols": 140})
+    assert rig.manager.runner.live[tab["id"]].size == (40, 140)
+
+
+def test_more_handlers_answer_more_types(tmp_path):
+    seen: list[dict] = []
+
+    async def handler(message):
+        seen.append(message)
+
+    async def body() -> None:
+        settings = Settings(data_dir=tmp_path, gh_command=str(tmp_path / "no-gh"))
+        loop = asyncio.get_running_loop()
+        manager = TabManager(settings, print, loop, handlers={"app_status": handler})
+        await manager.handle({"type": "app_status"})
+
+    asyncio.run(body())
+    assert seen == [{"type": "app_status"}]
 
 
 def write_rollout(settings: Settings, session_id: str, cwd: str, started: str) -> None:

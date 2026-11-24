@@ -1,4 +1,8 @@
-"""One pseudo-console and the thread that reads it."""
+"""One pseudo-console and the thread that reads it.
+
+Runs in the session host as well as the app, so it imports nothing else of the app's:
+`host_protocol.HOST_MODULES` counts it as host code.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,33 @@ from typing import Any, Protocol
 log = logging.getLogger(__name__)
 
 READ_CHUNK = 65536
+
+# Claude reports its state (OSC 7501, read by `attention.py`) only to a terminal that
+# answers its `7501;?` query, and stops waiting soon. So it is answered here, on the
+# reader thread, before the output goes anywhere: in the session host that is what keeps
+# a Claude tab reporting while no window is connected.
+STATUS_QUERY = "\x1b]7501;?"
+STATUS_REPLY = f"{STATUS_QUERY}\x1b\\"
+
+
+class QueryWatch:
+    """Counts status queries in a stream cut into arbitrary chunks."""
+
+    def __init__(self) -> None:
+        self._tail = ""
+
+    def feed(self, text: str) -> int:
+        """How many queries this chunk completes."""
+        joined = self._tail + text
+        count = 0
+        found = joined.find(STATUS_QUERY)
+        while found >= 0:
+            # One ending inside the carried tail was counted with the chunk before.
+            if found + len(STATUS_QUERY) > len(self._tail):
+                count += 1
+            found = joined.find(STATUS_QUERY, found + 1)
+        self._tail = joined[-(len(STATUS_QUERY) - 1) :]
+        return count
 
 
 class PtyProcess(Protocol):
@@ -75,6 +106,7 @@ class PtySession:
         self._kill = kill
         self._process: PtyProcess | None = None
         self._closing = False
+        self._queries = QueryWatch()
 
     def start(
         self, argv: list[str], cwd: str, env: Mapping[str, str], size: tuple[int, int]
@@ -96,6 +128,8 @@ class PtySession:
                 log.warning("pty read failed: %s", exc)
                 break
             if data:
+                for _ in range(self._queries.feed(data)):
+                    self.write(STATUS_REPLY)
                 self._on_output(data)
         if not self._closing:
             self._on_exit(process.exitstatus)
@@ -117,6 +151,9 @@ class PtySession:
             self._process.setwinsize(rows, cols)
         except (EOFError, OSError) as exc:
             log.info("resize of a closed pty: %s", exc)
+
+    def remember(self, state: dict[str, Any]) -> None:
+        """Nothing outlives this process, so there is nothing to keep for a later one."""
 
     def close(self) -> None:
         """End the process tree without reporting an exit. Blocks on the kill."""

@@ -675,6 +675,51 @@ def test_closing_the_window_brings_every_tab_back(tmp_path):
     asyncio.run(run())
 
 
+def test_a_restart_keeps_the_agent_running_mid_turn(tmp_path):
+    async def run() -> None:
+        make_projects(tmp_path)
+        app = App(tmp_path)
+        try:
+            window = await app.start()
+            tab = await open_tab(window, "alpha")
+            await window.type_into(tab, "work\r")
+            await window.wait_class(tab, has("working"), "working")
+            [agent] = [launch["pid"] for launch in launches(app)]
+            before = app.app_pid()
+
+            await window.js("window.__agentTerminal.send({type: 'app_restart', update: false})")
+            window = await app.follow_restart(before)
+
+            await window.wait("window.__agentTerminal.tabs().length === 1", "the tab back")
+            assert len(launches(app)) == 1, "the agent was started again, not kept"
+            assert process_running(agent), "the agent did not survive the restart"
+            await window.wait_class(tab, has("working"), "still working")
+            screen = f"window.__agentTerminal.screen({json.dumps(tab)})"
+            await window.wait(f"{screen}.includes('fake agent ready')", "the screen replayed")
+            sessions = await window.wait("window.__agentTerminal.app()?.sessions", "app status")
+            assert sessions == {"kept": True, "stale": False}
+
+            # The same process, still answering: input reaches it and its state comes back.
+            await window.type_into(tab, "finish\r")
+            # Fails if the replayed screen's old queries were answered into the agent.
+            await window.wait_class(tab, has("finished"), "finished")
+
+            host = app.host_pid()
+            await app.close_followed_window()
+            assert not process_running(agent), "the agent outlived the window"
+            for _ in range(100):
+                if app.host_pid() is None:
+                    break
+                await asyncio.sleep(0.1)
+            assert app.host_pid() is None, "the session host outlived the window"
+            assert host is not None and not process_running(host)
+        finally:
+            await app.dispose()
+            app.kill()
+
+    asyncio.run(run())
+
+
 def test_right_click_in_a_terminal_pastes(tmp_path):
     async def body(_app: App, window: Window) -> None:
         tab = await open_tab(window, "alpha")

@@ -4,7 +4,14 @@ import threading
 import pytest
 
 from agent_terminal import pty_session
-from agent_terminal.pty_session import PtyProcess, PtySession, SpawnError
+from agent_terminal.pty_session import (
+    STATUS_QUERY,
+    STATUS_REPLY,
+    PtyProcess,
+    PtySession,
+    QueryWatch,
+    SpawnError,
+)
 
 TIMEOUT = 5
 
@@ -101,6 +108,42 @@ def test_a_failed_read_ends_the_session(harness):
     harness.start()
     harness.process.reads.put(OSError("broken"))
     assert harness.exited.get(timeout=TIMEOUT) is None
+
+
+def test_the_status_query_is_answered_before_the_output_goes_on(harness):
+    harness.start()
+    harness.process.reads.put("\x1b]7501;?\x1b\\")
+    assert harness.output.get(timeout=TIMEOUT) == "\x1b]7501;?\x1b\\"
+    assert harness.process.written == [STATUS_REPLY]
+    harness.process.finish(0)
+
+
+def test_the_status_reply_is_what_claude_accepts():
+    # Claude takes any OSC 7501 reply whose data starts with "?".
+    assert STATUS_REPLY == "\x1b]7501;?\x1b\\"
+
+
+class TestQueryWatch:
+    def test_counts_each_query(self):
+        assert QueryWatch().feed("a\x1b]7501;?\x07b\x1b]7501;?\x1b\\") == 2
+
+    def test_other_output_is_not_a_query(self):
+        assert QueryWatch().feed("\x1b]7501;state=idle\x1b\\ plain") == 0
+
+    @pytest.mark.parametrize("cut", range(1, len(STATUS_QUERY)))
+    def test_a_query_cut_between_chunks_counts_once(self, cut):
+        watch = QueryWatch()
+        assert watch.feed("x" + STATUS_QUERY[:cut]) + watch.feed(STATUS_QUERY[cut:] + "y") == 1
+
+    def test_a_query_is_not_counted_again_from_the_tail(self):
+        watch = QueryWatch()
+        assert watch.feed(STATUS_QUERY) == 1
+        assert watch.feed("more") == 0
+
+
+def test_remember_is_a_no_op(harness):
+    harness.session.remember({"status": "idle"})
+    assert harness.process.written == []
 
 
 def test_write_and_resize_reach_the_process(harness):

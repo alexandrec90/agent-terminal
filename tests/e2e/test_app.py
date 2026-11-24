@@ -691,6 +691,28 @@ def test_right_click_in_a_terminal_pastes(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_right_click_leaves_the_paste_to_an_agent_tracking_the_mouse(tmp_path):
+    """Claude Code pastes on a right-click it is sent, so the app pasting too doubled it."""
+
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        mode = f"window.__agentTerminal.mouseMode({json.dumps(tab)})"
+        assert await window.js(mode) == "none"
+        await window.type_into(tab, "mouse\r")
+        await window.wait(f"{mode} !== 'none'", "the agent to turn mouse tracking on")
+        # What the page sends, recorded as it sends it: the paste request is synchronous.
+        await window.js(
+            "(() => { window.__sent = []; const send = WebSocket.prototype.send;"
+            " WebSocket.prototype.send = function (data) {"
+            " window.__sent.push(JSON.parse(data).type); return send.call(this, data); };"
+            " })()"
+        )
+        await window.right_click(".term-host.shown .xterm")
+        assert "paste" not in await window.js("window.__sent")
+
+    scenario(tmp_path, body)
+
+
 def test_a_second_launch_hands_over_instead_of_doubling(tmp_path):
     def launch_again(app: App) -> int:
         second = subprocess.run(app.command(), cwd=app.root, env=app.env(), timeout=30, check=False)

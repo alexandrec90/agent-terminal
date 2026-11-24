@@ -526,8 +526,11 @@ button.tab-chip:hover {
 
 /* ---- New session dialog ---- */
 
+/* Pinned from the top rather than centered: when a dialog does grow (a third note line),
+   it grows downward instead of shifting everything above it. */
 dialog {
   width: min(480px, calc(100vw - 32px));
+  margin: 12vh auto auto;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -556,11 +559,15 @@ legend {
   font-weight: 600;
 }
 
+/* The scroll box clips whatever paints outside it, so it is padded by the selected
+   outline's width (and pulled back out by the same, to keep the column aligned). */
 #project-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   max-height: 40vh;
+  margin: -2px;
+  padding: 2px;
   overflow-y: auto;
 }
 
@@ -651,12 +658,21 @@ legend {
   background: var(--panel-raised);
 }
 
+/* The notes come and go as folders are inspected. Their room is kept either way, two
+   lines of it, so the dialog does not resize and re-center when one appears. */
 #folder-notes {
+  min-height: calc(2.8em + 16px);
   margin: 10px 0 0;
   padding: 8px 10px;
   border-left: 2px solid var(--attention);
   background: var(--panel-raised);
   font-size: 12px;
+  line-height: 1.4;
+}
+
+#folder-notes[hidden] {
+  display: block;
+  visibility: hidden;
 }
 
 #folder-notes p {

@@ -299,7 +299,7 @@ async def test_a_tab_for_a_prs_prompt_resumes_it_in_its_worktree(rig):
 
     tab = rig.requests.tab_for_prompt(rig.message("pr_resume", 7))
     assert (tab.agent, tab.session_id) == ("claude", "session-1")
-    assert tab.worktree_name == "a"
+    assert tab.worktree is True
     assert Path(tab.cwd) == tree
     assert tab.title == "PR 7"
     assert Path(tab.project_path) == rig.key()

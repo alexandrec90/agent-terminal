@@ -97,13 +97,19 @@ export class Terminals {
   };
 
   // As Windows Terminal: right-click copies a selection, and pastes if there is none.
+  // An agent that turned mouse tracking on is sent the click by xterm, and Claude Code
+  // pastes on it itself; pasting here as well would paste twice.
   onContextMenu(event, id, term) {
     event.preventDefault();
     if (term.hasSelection()) {
       this.copy(term);
-    } else {
+    } else if (term.modes.mouseTrackingMode === "none") {
       this.send({ type: "paste", id });
     }
+  }
+
+  mouseMode(id) {
+    return this.entries.get(id)?.term.modes.mouseTrackingMode ?? null;
   }
 
   paste(id, text) {

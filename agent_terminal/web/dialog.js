@@ -1,6 +1,14 @@
 // The new-session dialog. A group's "+" arrives with the folder fixed; otherwise any folder
 // can be chosen: a project, a typed path, or the native picker. Agent and worktree are
 // chosen either way. Whatever would stop a start is said here, before it happens.
+//
+// Without a fixed folder it also manages the projects root: a project can be deleted (to
+// the Recycle Bin, after a confirmation saying what only exists here), and any of the
+// user's GitHub repositories not yet in it can be cloned in.
+
+import { confirmAction } from "./confirm.js";
+import { icon } from "./icons.js";
+import { RemoteRepos } from "./remote.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
 const TYPING_PAUSE_MS = 250;
@@ -15,8 +23,8 @@ function trustNote(agent, worktree) {
 }
 
 export class NewTabDialog {
-  constructor({ start, inspect, browse, prepare }) {
-    this.requests = { start, inspect, browse, prepare };
+  constructor(requests) {
+    this.requests = requests;
     this.projects = [];
     this.requested = null;
     this.folder = null;
@@ -33,6 +41,13 @@ export class NewTabDialog {
     this.prepare = document.getElementById("prepare-worktree");
     this.start = document.getElementById("new-tab-start");
     this.form = document.getElementById("new-tab-form");
+    this.message = document.getElementById("project-message");
+    this.remote = new RemoteRepos({
+      list: requests.listRemote,
+      clone: requests.clone,
+      cloned: (path) => this.onCloned(path),
+      say: (text) => this.say(text),
+    });
     this.wire();
   }
 
@@ -79,13 +94,23 @@ export class NewTabDialog {
     this.pathInput.value = "";
     this.projectField.hidden = fixed !== null;
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
+    this.say("");
+    this.remote.show(false);
     this.renderProjects();
     this.choose(fixed?.path ?? "");
     this.dialog.showModal();
   }
 
+  // A line under the project list: what a clone or delete came to.
+  say(text) {
+    this.message.textContent = text;
+    this.message.hidden = !text;
+  }
+
   renderProjects() {
-    const buttons = this.projects.map((project) => {
+    const items = this.projects.map((project) => {
+      const item = document.createElement("div");
+      item.className = "project-item";
       const button = document.createElement("button");
       button.type = "button";
       button.className = "project";
@@ -96,9 +121,51 @@ export class NewTabDialog {
         this.pathInput.value = "";
         this.choose(project.path);
       });
-      return button;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "project-delete";
+      remove.title = `Delete ${project.name}`;
+      remove.setAttribute("aria-label", remove.title);
+      remove.append(icon("trash"));
+      remove.addEventListener("click", () => {
+        this.say("");
+        this.requests.describeDeletion(project.path);
+      });
+      item.append(button, remove);
+      return item;
     });
-    this.projectList.replaceChildren(...buttons);
+    this.projectList.replaceChildren(...items);
+    this.markSelected();
+  }
+
+  // The backend's account of what deleting a project would lose; asked before every delete.
+  setDeletion(message) {
+    if (!this.dialog.open) return;
+    if (message.error) {
+      this.say(message.error);
+      return;
+    }
+    const lines = [`Move ${message.name} to the Recycle Bin?`];
+    if (message.risks.length) lines.push("Only on this machine:", ...message.risks);
+    else lines.push("Everything in it is pushed to a remote.");
+    confirmAction(lines, "Delete", () => this.requests.deleteProject(message.requested));
+  }
+
+  setDeleted(message) {
+    if (!this.dialog.open) return;
+    if (message.error) {
+      this.say(message.error);
+      return;
+    }
+    this.say("");
+    if (this.requested === message.requested) this.choose("");
+  }
+
+  // A finished clone is chosen, ready to start a session in.
+  onCloned(path) {
+    if (!this.dialog.open || this.projectField.hidden) return;
+    this.pathInput.value = "";
+    this.choose(path);
   }
 
   choose(path) {
@@ -111,7 +178,7 @@ export class NewTabDialog {
   }
 
   markSelected() {
-    for (const button of this.projectList.children) {
+    for (const button of this.projectList.querySelectorAll(".project")) {
       button.classList.toggle("selected", button.dataset.path === this.requested);
     }
   }

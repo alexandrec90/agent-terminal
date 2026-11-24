@@ -48,6 +48,18 @@ class Snapshot:
 
     tabs: list[Tab] = field(default_factory=list)
     active_id: str | None = None
+    # Group folders, by path: those folded to their heading, and those closed while they
+    # held only PRs, which stay out of the sidebar until a session opens there.
+    folded: list[str] = field(default_factory=list)
+    hidden: list[str] = field(default_factory=list)
+
+
+def paths_of(value: object) -> list[str]:
+    """A saved list of folder paths. Anything else, as a file from before it was kept,
+    is no paths at all rather than a reason to lose every tab."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -72,7 +84,12 @@ def parse_snapshot(text: str) -> Snapshot:
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"malformed tab record: {exc}") from exc
     active = data.get("active_id")
-    return Snapshot(tabs=tabs, active_id=active if isinstance(active, str) else None)
+    return Snapshot(
+        tabs=tabs,
+        active_id=active if isinstance(active, str) else None,
+        folded=paths_of(data.get("folded")),
+        hidden=paths_of(data.get("hidden")),
+    )
 
 
 def load_snapshot(path: Path) -> Snapshot:
@@ -97,6 +114,8 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
         "version": SCHEMA_VERSION,
         "active_id": snapshot.active_id,
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
+        "folded": snapshot.folded,
+        "hidden": snapshot.hidden,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

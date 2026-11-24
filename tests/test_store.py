@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -29,7 +30,7 @@ def make_tab(**fields) -> Tab:
 
 def test_a_snapshot_round_trips(tmp_path):
     path = tmp_path / "state.json"
-    tab = make_tab(parked=True, attention="input", session_id="s", worktree_name="w", worktree=True)
+    tab = make_tab(parked=True, attention="input", session_id="s", cwd="C:\\w", worktree=True)
     save_snapshot(path, Snapshot(tabs=[tab], active_id="a"))
     assert load_snapshot(path) == Snapshot(tabs=[tab], active_id="a")
 
@@ -116,6 +117,23 @@ def test_paths_of(saved, read):
 def test_a_key_from_another_version_is_ignored():
     data = {**make_tab().to_dict(), "from_the_future": True}
     assert tab_from_dict(data) == make_tab()
+
+
+def test_a_worktree_this_app_once_named_becomes_its_folder():
+    record = {**make_tab(worktree=True).to_dict(), "worktree_name": "tab-1a2b3c4d"}
+    expected = Path("C:\\demo") / ".claude" / "worktrees" / "tab-1a2b3c4d"
+    assert tab_from_dict(record).cwd == str(expected)
+
+
+def test_a_recorded_folder_outranks_an_old_name():
+    record = {**make_tab(cwd="C:\\found").to_dict(), "worktree_name": "tab-1a2b3c4d"}
+    assert tab_from_dict(record).cwd == "C:\\found"
+
+
+@pytest.mark.parametrize("name", [None, "", 7])
+def test_an_empty_or_odd_old_name_is_ignored(name):
+    record = {**make_tab().to_dict(), "worktree_name": name}
+    assert tab_from_dict(record).cwd is None
 
 
 @pytest.mark.parametrize(("saved", "read"), [(True, "input"), (False, "")])

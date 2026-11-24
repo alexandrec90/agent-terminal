@@ -27,11 +27,10 @@ class Tab:
     agent: str
     created_at: float
     worktree: bool = False
-    # Claude's worktree name, chosen here so the tab can find the directory again.
-    worktree_name: str | None = None
     # Claude's is chosen up front; Codex's is read from its rollout once it exists.
     session_id: str | None = None
     # The agent's working directory once known, for a worktree the project path is not it.
+    # Each agent names its own worktree, so this is read back from the agent's records.
     cwd: str | None = None
     title: str = ""
     parked: bool = False
@@ -67,6 +66,10 @@ def tab_from_dict(data: dict[str, Any]) -> Tab:
     required key raises `TypeError`."""
     known = {f.name for f in fields(Tab)}
     tab = Tab(**{key: value for key, value in data.items() if key in known})
+    legacy_name = data.get("worktree_name")
+    if isinstance(legacy_name, str) and legacy_name and not tab.cwd:
+        # Saved when this app named Claude's worktrees: the folder followed from the name.
+        tab.cwd = str(Path(tab.project_path) / ".claude" / "worktrees" / legacy_name)
     if isinstance(tab.attention, bool):
         # Saved before the two kinds were told apart. Which it was is lost, so take the
         # louder: a tab that only finished costs a look, a missed question costs the work.

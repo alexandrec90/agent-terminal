@@ -12,6 +12,7 @@ from agent_terminal.desktop import Desktop
 from agent_terminal.instance import WINDOW_TITLE, acquire_instance_lock, focus_running_window
 from agent_terminal.server import Backend
 from agent_terminal.settings import Settings
+from agent_terminal.taskbar import brand_window, claim_process_identity
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def run_window(url: str, picker: FolderPicker) -> None:
         height=WINDOW_SIZE[1],
         background_color=BACKGROUND,
     )
-    webview.start(icon=str(APP_ICON))
+    webview.start(func=brand_window, args=(picker.window, APP_ICON), icon=str(APP_ICON))
 
 
 def main() -> int:
@@ -66,6 +67,7 @@ def main() -> int:
     if lock is None:
         focus_running_window()
         return 0
+    claim_process_identity()
     picker = FolderPicker()
     backend = Backend(settings, desktop=Desktop(pick_folder=picker))
     try:

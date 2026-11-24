@@ -21,6 +21,7 @@ export class NewTabDialog {
     this.requested = null;
     this.folder = null;
     this.error = "";
+    this.wantsWorktree = true;
     this.dialog = document.getElementById("new-tab");
     this.title = document.getElementById("new-tab-title");
     this.projectField = document.getElementById("project-field");
@@ -36,6 +37,11 @@ export class NewTabDialog {
   }
 
   wire() {
+    // The user's own choice, kept apart from the box: a folder that cannot take a worktree
+    // clears the box, and the next folder that can gets the choice back.
+    this.worktree.addEventListener("change", () => {
+      this.wantsWorktree = this.worktree.checked;
+    });
     this.form.addEventListener("submit", () => this.submit());
     this.form.addEventListener("change", () => this.render());
     document.getElementById("new-tab-cancel").addEventListener("click", () => this.dialog.close());
@@ -69,7 +75,7 @@ export class NewTabDialog {
 
   // `fixed` is a group's folder, as { path, name }; without one, any folder can be chosen.
   open(fixed = null) {
-    this.worktree.checked = false;
+    this.wantsWorktree = true;
     this.pathInput.value = "";
     this.projectField.hidden = fixed !== null;
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
@@ -162,7 +168,7 @@ export class NewTabDialog {
   render() {
     const blocker = this.worktreeBlocker();
     this.worktree.disabled = blocker !== null;
-    if (blocker) this.worktree.checked = false;
+    this.worktree.checked = blocker === null && this.wantsWorktree;
     this.worktreeLabel.classList.toggle("disabled", blocker !== null);
     this.prepare.hidden = blocker === null;
     this.prepare.disabled = false;

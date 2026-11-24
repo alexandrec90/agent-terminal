@@ -118,11 +118,17 @@ class Window:
         """Wait for the backend's answer about the chosen folder."""
         await self.wait("!document.getElementById('new-tab-start').disabled", "the folder's facts")
 
-    async def start_session(self, agent: str = "claude", worktree: bool = False) -> None:
+    async def set_worktree(self, on: bool) -> None:
+        """Click the worktree box only if it is not already as wanted: it starts checked."""
+        if await self.js("document.getElementById('worktree').checked") != on:
+            await self.click("#worktree")
+
+    async def start_session(self, agent: str = "claude", worktree: bool | None = False) -> None:
+        """Start from the dialog; `worktree=None` leaves the box as it stands."""
         await self.dialog_ready()
         await self.click(f"input[name=agent][value={agent}]")
-        if worktree:
-            await self.click("#worktree")
+        if worktree is not None:
+            await self.set_worktree(worktree)
         await self.click("#new-tab-start")
 
     async def new_tab(self, project: str, agent: str = "claude", worktree: bool = False) -> None:

@@ -82,7 +82,11 @@ class Rig:
             # PR board off, and `test_pr_board.py` has it for itself.
             gh_command=str(tmp_path / "no-gh"),
         )
-        entries = {tmp_path.as_posix(): {"hasTrustDialogAccepted": True}}
+        # Claude's trust stops at a repository's root, so `repo` needs its own.
+        entries = {
+            tmp_path.as_posix(): {"hasTrustDialogAccepted": True},
+            (self.settings.projects_root / "repo").as_posix(): {"hasTrustDialogAccepted": True},
+        }
         self.settings.claude_config_file.write_text(json.dumps({"projects": entries}))
         self.settings.codex_home.mkdir()
         (self.settings.codex_home / "config.toml").write_text(
@@ -1221,6 +1225,18 @@ async def test_untrusted_worktree_runs_claude_plain_at_the_repository(rig):
     assert "--worktree" not in rig.processes[0].command()
     assert "--session-id" not in rig.processes[0].command()
     assert Path(rig.processes[0].cwd) == rig.repo.resolve()
+
+
+@run
+async def test_a_repository_under_a_trusted_folder_is_asked_about_first(rig):
+    """The folder above is trusted but the repository is not: `claude -w` refuses that."""
+    rig.make_repository()
+    entries = {rig.settings.projects_root.as_posix(): {"hasTrustDialogAccepted": True}}
+    rig.settings.claude_config_file.write_text(json.dumps({"projects": entries}))
+    await rig.hello()
+    await rig.create(worktree=True)
+    assert "--worktree" not in rig.processes[0].command()
+    assert rig.tabs()[0]["awaiting_trust"] is True
 
 
 @run

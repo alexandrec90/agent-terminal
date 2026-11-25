@@ -1,11 +1,13 @@
 """Whether an agent already trusts a folder. This only reads their records: the decision
 is the user's, on the agent's own screen, so nothing here ever grants it.
 
-Seen from Claude Code 2.1.318 and Codex 0.166:
+Seen from Claude Code 2.1.332 and Codex 0.166:
 
     Claude   `projects[<path>].hasTrustDialogAccepted` in `~/.claude.json`, forward
-             slashes. Trust covers subfolders. `claude -w` in an untrusted folder exits 1
-             rather than asking, which is why `runner.py` has a step for it.
+             slashes. Trust covers subfolders, but not across a repository: a repository
+             under a trusted folder is asked about again, by plain `claude` and `-w`
+             alike. `claude -w` in an untrusted folder exits 1 rather than asking, which
+             is why `runner.py` has a step for it.
     Codex    `[projects.'<lowercase path>'] trust_level = "trusted"` in `config.toml`, on
              the repository root. `codex --worktree` asks for itself.
 """
@@ -46,15 +48,25 @@ def _projects(config: dict[str, Any]) -> dict[str, Any]:
     return projects if isinstance(projects, dict) else {}
 
 
+def _claude_scope(folder: Path) -> list[str]:
+    """The folders whose trust Claude lets reach `folder`: it and those above it, up to
+    its repository's root and no further."""
+    chain = [_comparable(candidate) for candidate in (folder, *folder.parents)]
+    root = main_checkout(folder)
+    if root is not None and _comparable(root) in chain:
+        return chain[: chain.index(_comparable(root)) + 1]
+    return chain
+
+
 def claude_trusted(config_file: Path, folder: Path) -> bool:
-    """True if Claude trusts `folder` or any folder above it."""
+    """True if Claude trusts `folder`, or a folder above it within the same repository."""
     projects = _projects(_read_mapping(config_file, json.loads))
     trusted = {
         _comparable(path)
         for path, entry in projects.items()
         if isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
     }
-    return any(_comparable(candidate) in trusted for candidate in (folder, *folder.parents))
+    return any(candidate in trusted for candidate in _claude_scope(folder))
 
 
 def codex_trusted(codex_home: Path, folder: Path) -> bool:

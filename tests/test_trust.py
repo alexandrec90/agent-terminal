@@ -9,6 +9,11 @@ def write_claude(path, entries):
     path.write_text(json.dumps({"projects": entries}), encoding="utf-8")
 
 
+def init(repository):
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=repository, check=True, capture_output=True)  # noqa: S607 - a fixed test command
+
+
 def write_codex(home, path, level="trusted"):
     escaped = str(path).lower().replace("\\", "\\\\")
     (home / "config.toml").write_text(
@@ -26,6 +31,23 @@ class TestClaude:
         config = tmp_path / "claude.json"
         write_claude(config, {tmp_path.as_posix(): {"hasTrustDialogAccepted": True}})
         assert claude_trusted(config, tmp_path / "a" / "b")
+
+    def test_trust_does_not_cross_into_a_repository_below(self, tmp_path):
+        """Claude Code 2.1.332 asks again in a repository under a trusted folder, and
+        `claude -w` there exits 1 instead."""
+        config = tmp_path / "claude.json"
+        repository = tmp_path / "repo"
+        init(repository)
+        write_claude(config, {tmp_path.as_posix(): {"hasTrustDialogAccepted": True}})
+        assert not claude_trusted(config, repository)
+        assert not claude_trusted(config, repository / "sub")
+
+    def test_a_repositorys_trust_covers_its_subfolders(self, tmp_path):
+        config = tmp_path / "claude.json"
+        repository = tmp_path / "repo"
+        init(repository)
+        write_claude(config, {repository.as_posix(): {"hasTrustDialogAccepted": True}})
+        assert claude_trusted(config, repository / "a" / "b")
 
     def test_a_subfolders_trust_does_not_cover_its_parent(self, tmp_path):
         config = tmp_path / "claude.json"
@@ -75,8 +97,8 @@ class TestCodex:
     def test_trusting_the_repository_covers_a_folder_in_it(self, tmp_path):
         repository = tmp_path / "repo"
         below = repository / "sub"
-        below.mkdir(parents=True)
-        subprocess.run(["git", "init"], cwd=repository, check=True, capture_output=True)  # noqa: S607 - a fixed test command
+        init(repository)
+        below.mkdir()
         write_codex(tmp_path, repository)
         assert codex_trusted(tmp_path, below)
 

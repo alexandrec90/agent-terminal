@@ -68,8 +68,12 @@ def make_repository(folder: Path) -> None:
 def make_projects(base: Path) -> None:
     make_repository(base / "projects" / "alpha")
     (base / "projects" / "beta").mkdir()
-    # Trusted as a whole, as the user's own projects root is.
-    trusted = {(base / "projects").as_posix(): {"hasTrustDialogAccepted": True}}
+    # The projects root's trust stops at a repository, so alpha has its own, as a
+    # repository the user has run Claude in does.
+    trusted = {
+        (base / "projects").as_posix(): {"hasTrustDialogAccepted": True},
+        (base / "projects" / "alpha").as_posix(): {"hasTrustDialogAccepted": True},
+    }
     (base / "claude.json").write_text(json.dumps({"projects": trusted}), encoding="utf-8")
 
 

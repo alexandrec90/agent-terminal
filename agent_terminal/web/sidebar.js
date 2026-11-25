@@ -2,6 +2,7 @@
 // dragged them into, then the order they first appeared. PR text was written by whoever
 // opened it, so it only ever goes in as text.
 
+import { gateIcons, landButton } from "./delivery.js";
 import { icon } from "./icons.js";
 
 const STATUS_TEXT = {
@@ -274,9 +275,14 @@ export function shipChip(ship) {
   return chip;
 }
 
-function tabChip(tab, actions) {
-  if (tab.pr) return prChip(tab.pr, actions);
-  return tab.ship ? shipChip(tab.ship) : null;
+// The PR or what stands in for it, then what can be done and what has been.
+function tabChips(tab, actions) {
+  const chips = [];
+  if (tab.pr) chips.push(prChip(tab.pr, actions));
+  else if (tab.ship) chips.push(shipChip(tab.ship));
+  if (tab.land) chips.push(landButton(tab, actions.land));
+  if (tab.gates.length) chips.push(gateIcons(tab.gates));
+  return chips;
 }
 
 function renderTab(tab, groupTabs, activeId, actions) {
@@ -290,8 +296,12 @@ function renderTab(tab, groupTabs, activeId, actions) {
   const line = span("tab-line", "");
   line.append(span("tab-title", tab.title || tab.agent), timeLabel(tab));
   main.append(line, span("tab-meta", tabMeta(tab)));
-  const chip = tabChip(tab, actions);
-  if (chip) main.append(chip);
+  const chips = tabChips(tab, actions);
+  if (chips.length) {
+    const holder = span("tab-chips", "");
+    holder.append(...chips);
+    main.append(holder);
+  }
 
   const close = document.createElement("button");
   close.type = "button";

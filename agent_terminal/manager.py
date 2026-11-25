@@ -13,6 +13,7 @@ from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit, Handler
 from agent_terminal.groups import Groups, open_folders, successor
 from agent_terminal.history import HistoryLinks, SessionHistory
+from agent_terminal.land_requests import LandRequests
 from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
@@ -103,6 +104,7 @@ class TabManager:
             "paste": self._on_paste,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **LandRequests(self.board, self.runner, self._tab).handlers(),
             **history.handlers(),
             **self._ordering.handlers(),
             **self._projects.handlers(),

@@ -1,5 +1,7 @@
 import json
 import subprocess
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +17,9 @@ from agent_terminal.prs import (
     GhMissing,
     check_outcome,
     check_rows,
+    is_settled,
     parse_pull_requests,
+    split_checks,
     summarize_checks,
     to_pull_request,
 )
@@ -89,7 +93,54 @@ class TestChecks:
         }
 
 
+class TestSplitChecks:
+    def test_kinds_are_judged_apart(self):
+        e2e = {**RUN_GOING, "name": "Browser e2e"}
+        assert split_checks([RUN_OK, e2e]) == (CHECKS_PASSING, CHECKS_PENDING)
+
+    def test_a_workflow_can_name_the_kind(self):
+        run = {**RUN_FAILED, "workflowName": "End-to-end"}
+        assert split_checks([run]) == (CHECKS_NONE, CHECKS_FAILING)
+
+    def test_a_status_context_counts(self):
+        check = {"__typename": "StatusContext", "state": "SUCCESS", "context": "ci/build"}
+        assert split_checks([check]) == (CHECKS_PASSING, CHECKS_NONE)
+
+    def test_merge_machinery_and_skipped_jobs_judge_nothing(self):
+        merger = {**RUN_FAILED, "workflowName": "Auto-merge"}
+        assert split_checks([merger, RUN_SKIPPED]) == (CHECKS_NONE, CHECKS_NONE)
+        assert split_checks(None) == (CHECKS_NONE, CHECKS_NONE)
+
+
+class TestSettled:
+    NOW = datetime(2026, 11, 25, 12, tzinfo=UTC)
+
+    def merged(self, ago: timedelta, **fields):
+        pr = to_pull_request({**RECORD, "state": "MERGED"})
+        stamp = (self.NOW - ago).isoformat().replace("+00:00", "Z")
+        return replace(pr, merged_at=stamp, **fields)
+
+    def test_an_open_pr_never_is(self):
+        assert not is_settled(to_pull_request(RECORD), self.NOW)
+
+    def test_a_merged_one_is_once_everything_passed(self):
+        assert is_settled(self.merged(timedelta()), self.NOW)
+        assert not is_settled(self.merged(timedelta(), e2e=CHECKS_PENDING), self.NOW)
+
+    @pytest.mark.parametrize("ci", [CHECKS_NONE, CHECKS_PENDING, CHECKS_FAILING])
+    def test_otherwise_only_time_settles_it(self, ci):
+        assert not is_settled(self.merged(timedelta(minutes=5), ci=ci), self.NOW)
+        assert is_settled(self.merged(timedelta(hours=3), ci=ci), self.NOW)
+
+    def test_an_unreadable_time_settles_it(self):
+        assert is_settled(replace(self.merged(timedelta(), ci=CHECKS_NONE), merged_at=""), self.NOW)
+
+
 class TestParsing:
+    def test_a_record_names_its_head_and_merge_time(self):
+        pr = to_pull_request({**RECORD, "headRefOid": "abc", "mergedAt": None})
+        assert (pr.head_oid, pr.merged_at, pr.ci, pr.e2e) == ("abc", "", "passing", "none")
+
     def test_reads_a_real_shaped_record(self):
         pr = to_pull_request(RECORD)
         assert (pr.number, pr.head, pr.base) == (505, "worktree-quizzical", "master")

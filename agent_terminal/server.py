@@ -42,6 +42,7 @@ SLOW_MESSAGES = frozenset(
         "pr_view",
         "pr_merge",
         "pr_close",
+        "land",
         "inspect_folder",
         "past_sessions",
         "resume_session",

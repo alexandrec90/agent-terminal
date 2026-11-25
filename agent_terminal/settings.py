@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     claude_command: str = "claude"
     codex_command: str = "codex"
     gh_command: str = "gh"
+    # devkit's checkout, whose `logs/` hold its local test tiers' results. Beside the
+    # projects unless said otherwise.
+    devkit_dir: Path | None = None
     # GitHub moves slowly here: the fix pass runs every half hour. A poll of `gh` per
     # repository a minute is 700-odd requests an hour across a dozen, of 5000 allowed.
     pr_poll_seconds: float = 60.0
@@ -60,6 +63,10 @@ class Settings(BaseSettings):
     update_branch: str = "main"
     # How often to ask `origin` whether there is an update. A fetch each time.
     update_check_seconds: float = 1800.0
+
+    @property
+    def devkit_root(self) -> Path:
+        return self.devkit_dir or self.projects_root / "devkit"
 
     @property
     def state_file(self) -> Path:

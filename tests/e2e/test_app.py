@@ -681,10 +681,38 @@ def test_a_prompt_shows_where_it_stands_in_shipping(tmp_path):
         )
         await window.wait("document.getElementById('review').hidden", "the terminal")
 
+        # Each thing that judges it has an icon; nothing is live before the merge.
+        gates = f"[...document.querySelectorAll('[data-id=\"{tab}\"] .gate')].map(g => g.className)"
+        await window.wait(f"{gates}.length === 2", "the indicators")
+        assert await window.js(gates) == ["gate passing", "gate pending"]
+
         # Merged on GitHub: the tab says so.
         write_prs(app, make_pr(9, "worktree-task", state="MERGED"))
         await window.wait(f"{chip}?.textContent === 'PR #9 merged'", "the merged chip")
         assert await window.js(on_chip) == "pr-merged"
+
+    scenario(tmp_path, body)
+
+
+def test_a_tab_with_unshipped_work_offers_to_land_it(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        alpha = tmp_path / "projects" / "alpha"
+        skill = alpha / ".claude" / "skills" / "land" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("land", encoding="utf-8")
+        git(alpha, "add", "--all")
+        git(alpha, "commit", "--message", "skill")
+        git(alpha, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(alpha, "switch", "--create", "worktree-task")
+        tab = await open_tab(window, "alpha")
+        button = f"document.querySelector('[data-id=\"{tab}\"] .land')"
+        assert await window.js(button) is None
+
+        (alpha / "new.txt").write_text("x", encoding="utf-8")
+        await window.wait(f"{button}?.textContent === 'Create PR'", "the button")
+        await window.js(f"{button}.click()")
+        screen = f"window.__agentTerminal.screen('{tab}')"
+        await window.wait(f"{screen}.includes('/land')", "the skill typed to the agent")
 
     scenario(tmp_path, body)
 

@@ -166,6 +166,18 @@ class TestCommitEverything:
 
 
 class TestContainsCommit:
+    def test_within_another_commit(self, repository):
+        first = run_git(repository, "rev-parse", "HEAD").strip()
+        git(repository, "commit", "--allow-empty", "--message", "second")
+        second = run_git(repository, "rev-parse", "HEAD").strip()
+        assert contains_commit(repository, first, second)
+        assert not contains_commit(repository, second, first)
+
+    def test_within_something_that_is_not_a_hash(self, repository):
+        first = run_git(repository, "rev-parse", "HEAD").strip()
+        assert not contains_commit(repository, first, "")
+        assert not contains_commit(repository, first, "--all")
+
     def test_true_for_a_commit_in_heads_history(self, repository):
         head = run_git(repository, "rev-parse", "HEAD").strip()
         assert contains_commit(repository, head) is True

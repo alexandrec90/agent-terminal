@@ -181,6 +181,25 @@ def test_the_sidebar_draws_each_state_from_the_icon_sprite(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_shift_enter_and_ctrl_enter_reach_the_agent_as_alt_enter(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        await open_tab(window, "alpha")
+        await window.js("document.querySelector('.term-host.shown textarea').focus()")
+        await window.js(
+            "(() => { window.__typed = []; const send = WebSocket.prototype.send;"
+            " WebSocket.prototype.send = function (data) { const sent = JSON.parse(data);"
+            " if (sent.type === 'input') window.__typed.push(sent.data);"
+            " return send.call(this, data); }; })()"
+        )
+        await window.press_enter(modifiers=8)
+        await window.press_enter(modifiers=2)
+        await window.press_enter()
+        await window.wait("window.__typed.includes('\\r')", "the plain Enter")
+        assert await window.js("window.__typed") == ["\x1b\r", "\x1b\r", "\r"]
+
+    scenario(tmp_path, body)
+
+
 def test_a_tab_shows_when_its_agent_needs_the_user(tmp_path):
     async def body(_app: App, window: Window) -> None:
         waiting = await open_tab(window, "alpha")

@@ -2,6 +2,7 @@ import { AppBar } from "./appbar.js";
 import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
+import { Productivity } from "./productivity.js";
 import { ReviewPanel } from "./review.js";
 import { refreshTimes, renderSidebar } from "./sidebar.js";
 import { Terminals } from "./terminals.js";
@@ -97,9 +98,12 @@ const appBar = new AppBar(document.getElementById("app-bar"), {
   restart: (choice) => send({ type: "app_restart", ...choice }),
 });
 
+const productivity = new Productivity();
+
 const send = connect(onMessage, () => {
   send({ type: "hello", ...terminals.dimensions() });
   send({ type: "app_status" });
+  send({ type: "productivity" });
 });
 const terminals = new Terminals(document.getElementById("terminals"), {
   send,
@@ -182,6 +186,9 @@ function onMessage(message) {
       appStatus = message;
       appBar.set(message);
       break;
+    case "productivity":
+      productivity.set(message);
+      break;
     default:
       console.warn("unknown message", message);
   }
@@ -203,4 +210,5 @@ setInterval(() => refreshTimes(groups), TIME_REFRESH_MS);
 
 document.getElementById("new-group").addEventListener("click", () => dialog.open());
 document.getElementById("empty-new").addEventListener("click", () => dialog.open());
+document.getElementById("productivity").addEventListener("close", () => terminals.focusActive());
 document.getElementById("new-tab").addEventListener("close", () => terminals.focusActive());

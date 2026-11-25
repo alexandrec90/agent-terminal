@@ -34,6 +34,7 @@ Starting it a second time brings the running window forward.
 | Review a PR | Click its chip on a tab, or its row in a group |
 | Merge or close a PR | **Merge** or **Close PR** in the review; both ask first |
 | Reopen a PR's session | **Open prompt** in the review, when its worktree still holds one |
+| See your day | The tally at the top: today's prompts and PRs, your average and your record. Click it for a graph by day |
 
 Amber means the agent cannot go on without you: it asked for permission, asked a
 question, failed, or is on a trust screen. Blue means it finished a turn. A grey tab
@@ -122,6 +123,15 @@ Merging squashes, as the harness's own merges do. It does not delete the branch:
 repository's delete-on-merge setting covers the remote, and `worktree.py reconcile` owns
 the worktree.
 
+### The tally
+
+Prompts are those Claude Code records in `~/.claude/history.jsonl`, typed in this app or
+anywhere else. Claude's own commands, such as `/clear`, and prompts the fix pass dispatched
+are not counted. A PR counts if a session you prompted opened it, or was on its branch
+first (`agent_terminal/own_prs.py`); scheduled tasks, fixers and bots are left out. Codex
+is in neither count. The average is over days that had any, before today; the record can
+be today's.
+
 ## How a tab knows
 
 No agent hook is involved. Both CLIs report their state to the terminal with an OSC 7501
@@ -171,6 +181,8 @@ agent_terminal/              the app
   prs.py                     pull requests through `gh`
   pr_board.py                keeping PRs current and tying them to tabs
   prompts.py                 finding the session that worked in a worktree
+  productivity.py            each day's prompts and PRs, for the tally
+  own_prs.py                 which PRs came from a session you prompted
   shipping.py                where a worktree stands with the fix pass
   server.py                  the loopback server the window's page talks to
   store.py                   the session file

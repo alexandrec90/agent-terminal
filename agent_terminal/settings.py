@@ -89,6 +89,11 @@ class Settings(BaseSettings):
         return self.data_dir / "agent-terminal.pid"
 
     @property
+    def created_prs_file(self) -> Path:
+        """Every PR the user opened, so only the latest are asked of GitHub."""
+        return self.data_dir / "created-prs.json"
+
+    @property
     def host_address_file(self) -> Path:
         return self.data_dir / "host.json"
 

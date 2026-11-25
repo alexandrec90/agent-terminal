@@ -21,6 +21,7 @@ from agent_terminal import close_guard
 from agent_terminal.desktop import Desktop
 from agent_terminal.host_client import HostSessions
 from agent_terminal.manager import TabManager
+from agent_terminal.productivity import Productivity
 from agent_terminal.relaunch import launch_relaunch
 from agent_terminal.sessions import LocalSessions
 from agent_terminal.settings import Settings
@@ -100,13 +101,14 @@ class Backend:
             self.request_restart,
             checkout=checkout,
         )
+        self._productivity = Productivity(settings, self._outbox.put_nowait, self._loop)
         self._manager = TabManager(
             settings,
             self._outbox.put_nowait,
             self._loop,
             sessions=sessions,
             desktop=desktop or Desktop(),
-            handlers=self._control.handlers(),
+            handlers={**self._control.handlers(), **self._productivity.handlers()},
         )
         self._socket: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
@@ -180,6 +182,7 @@ class Backend:
         for task in self._slow_tasks:
             task.cancel()
         self._control.stop()
+        self._productivity.stop()
         await self._manager.shutdown(keep_processes=self._keep_sessions)
         if self._pump_task is not None:
             self._pump_task.cancel()

@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -968,6 +969,35 @@ def test_right_click_leaves_the_paste_to_an_agent_tracking_the_mouse(tmp_path):
         )
         await window.right_click(".term-host.shown .xterm")
         assert "paste" not in await window.js("window.__sent")
+
+    scenario(tmp_path, body)
+
+
+def test_the_tally_counts_today_and_opens_the_graph(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        now = datetime.now().astimezone()
+        home = app.base / "claude-home"
+        home.mkdir(exist_ok=True)
+        records = [
+            {
+                "display": text,
+                "timestamp": now.timestamp() * 1000 - 1,
+                "project": "C:\\r\\.claude\\worktrees\\mine",
+                "sessionId": "s",
+            }
+            for text in ("a", "b")
+        ]
+        lines = "".join(json.dumps(record) + "\n" for record in records)
+        (home / "history.jsonl").write_text(lines, encoding="utf-8")
+        mine = make_pr(7, "worktree-mine", createdAt=now.isoformat())
+        write_prs(app, mine, make_pr(8, "agent/auto/upgrade", createdAt=now.isoformat()))
+        today = "[...document.querySelectorAll('.tally-today')].map((n) => n.textContent).join()"
+        await window.wait(f"{today} === '2,1'", "today's prompts and PRs")
+        await window.click("#tally")
+        await window.wait("document.getElementById('productivity').open", "the graph")
+        assert await window.js("document.querySelectorAll('.chart-bar').length") == 2
+        await window.click("#productivity-close")
+        await window.wait("!document.getElementById('productivity').open", "the graph to close")
 
     scenario(tmp_path, body)
 

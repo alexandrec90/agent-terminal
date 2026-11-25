@@ -20,6 +20,10 @@ from agent_terminal.settings import Settings
 log = logging.getLogger(__name__)
 
 GH_TIMEOUT_SECONDS = 60
+# A clone carries a repository's whole history, which a minute does not always cover.
+CLONE_TIMEOUT_SECONDS = 15 * 60
+REPO_LIMIT = "500"
+REPO_FIELDS = "name,nameWithOwner,description,isArchived"
 OPEN = "OPEN"
 MERGED = "MERGED"
 LIST_LIMIT = "50"
@@ -138,7 +142,7 @@ class Gh:
     def __init__(self, settings: Settings) -> None:
         self._command = settings.gh_command
 
-    def run(self, repository: Path, *args: str) -> str:
+    def run(self, repository: Path, *args: str, timeout: float = GH_TIMEOUT_SECONDS) -> str:
         """`gh`'s output. Raises `GhError` with what it said, or `GhMissing`."""
         try:
             done = subprocess.run(  # noqa: S603 - fixed subcommands; no shell, numbers validated
@@ -147,12 +151,12 @@ class Gh:
                 capture_output=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=GH_TIMEOUT_SECONDS,
+                timeout=timeout,
                 creationflags=NO_WINDOW,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise GhError(f"gh took over {GH_TIMEOUT_SECONDS} seconds") from exc
+            raise GhError(f"gh took over {timeout:g} seconds") from exc
         except OSError as exc:
             raise GhMissing(f"could not run gh: {exc}") from exc
         if done.returncode != 0:
@@ -231,3 +235,20 @@ class Gh:
     def close(self, repository: Path, number: int) -> None:
         """Close without merging."""
         self.run(repository, "pr", "close", str(number))
+
+    def list_repos(self, where: Path) -> str:
+        """The signed-in user's own repositories, as `gh repo list --json` gives them.
+        `repos.parse_repos` reads the reply."""
+        return self.run(where, "repo", "list", "--limit", REPO_LIMIT, "--json", REPO_FIELDS)
+
+    def clone(self, full_name: str, destination: Path) -> None:
+        """Clone `owner/name` into `destination`, which must not exist. The name is checked
+        by `repos.clone_target` first, so it cannot be read as an option."""
+        self.run(
+            destination.parent,
+            "repo",
+            "clone",
+            full_name,
+            str(destination),
+            timeout=CLONE_TIMEOUT_SECONDS,
+        )

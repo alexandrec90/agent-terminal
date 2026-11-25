@@ -31,7 +31,18 @@ BUSY_QUERY_TIMEOUT_SECONDS = 2
 # These wait on a native dialog, on git, or on GitHub, for seconds or for as long as the
 # user likes. Handled in turn, they would hold up every keystroke to every tab behind them.
 SLOW_MESSAGES = frozenset(
-    {"pick_folder", "prepare_worktree", "pr_view", "pr_merge", "pr_close", "inspect_folder"}
+    {
+        "pick_folder",
+        "prepare_worktree",
+        "pr_view",
+        "pr_merge",
+        "pr_close",
+        "inspect_folder",
+        "list_remote_repos",
+        "clone_repo",
+        "describe_deletion",
+        "delete_project",
+    }
 )
 
 

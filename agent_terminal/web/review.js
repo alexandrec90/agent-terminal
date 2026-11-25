@@ -1,5 +1,6 @@
 // The review panel: one PR, over the terminals. Everything from GitHub goes in as text.
 
+import { confirmAction } from "./confirm.js";
 import { renderDiff } from "./diff.js";
 
 const OUTCOME_MARK = { passing: "✓", failing: "✗", pending: "…" };
@@ -68,16 +69,6 @@ export class ReviewPanel {
     this.hasPrompt = false;
     this.linkedTab = null;
     this.busy = false;
-    this.confirmDialog = document.getElementById("confirm");
-    this.confirmText = document.getElementById("confirm-text");
-    this.confirmOk = document.getElementById("confirm-ok");
-    document.getElementById("confirm-cancel").addEventListener("click", () => {
-      this.confirmDialog.close();
-    });
-    this.confirmOk.addEventListener("click", () => {
-      this.confirmDialog.close();
-      this.pending?.();
-    });
   }
 
   isShowing(pr) {
@@ -123,14 +114,11 @@ export class ReviewPanel {
   }
 
   ask(text, label, run) {
-    this.confirmText.textContent = text;
-    this.confirmOk.textContent = label;
-    this.pending = () => {
+    confirmAction(text, label, () => {
       this.busy = true;
       this.render();
       run();
-    };
-    this.confirmDialog.showModal();
+    });
   }
 
   merge() {

@@ -142,6 +142,37 @@ def test_a_checkout_with_no_venv_uses_the_fallback(tmp_path):
     assert e2e.interpreter(tmp_path, "fallback") == "fallback"
 
 
+def test_a_checkout_with_a_venv_runs_pytest_under_it(tmp_path):
+    python = tmp_path / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    assert e2e.runner_argv(tmp_path, "fallback") == [str(python)]
+
+
+def test_a_checkout_with_no_venv_builds_one_holding_pytest(tmp_path, monkeypatch):
+    """devkit ledger e16cd1cb: `python scripts/e2e.py --help` in an unprovisioned tree
+    ran the machine's Python, which has no pytest. pytest is in `dev`, which a bare
+    `uv run` leaves out."""
+    monkeypatch.setattr(e2e.shutil, "which", lambda name: f"/bin/{name}")
+    argv = e2e.runner_argv(tmp_path, "fallback")
+    assert argv[:3] == ["uv", "run", "--frozen"]
+    assert {"--all-extras", "--all-groups"} <= set(argv) and argv[-1] == "python"
+    monkeypatch.setattr(e2e.shutil, "which", lambda name: None)
+    assert e2e.runner_argv(tmp_path, "fallback") == ["fallback"], "no uv: the old behaviour"
+
+
+def test_uv_no_sync_is_dropped_only_where_there_is_no_venv(tmp_path):
+    env = {e2e.NO_SYNC: "1", "PATH": "p"}
+    assert e2e.run_env(env, tmp_path) == {"PATH": "p"}
+    (tmp_path / ".venv").mkdir()
+    assert e2e.run_env(env, tmp_path) == env
+
+
+def test_a_command_prefix_leads_the_argv():
+    argv = e2e.pytest_argv(["uv", "run", "python"], Path("r.xml"))
+    assert argv[:5] == ["uv", "run", "python", "-m", "pytest"]
+
+
 def test_the_whole_tier_runs_when_nothing_is_named():
     argv = e2e.pytest_argv("py", Path("r.xml"))
     assert argv[:5] == ["py", "-m", "pytest", "tests", "-m"]

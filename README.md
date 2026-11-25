@@ -72,6 +72,7 @@ the window that comes back rebuilds each tab's screen from it.
 | `Updated: abc123 → def456` | The last update worked |
 | `Update failed at …` | It names the step; the full output is in `update.log` in the data directory |
 | `Running sessions use the previous session host.` | The update changed the host itself. **Restart sessions** (two clicks) ends every agent and resumes each one |
+| `This copy of the app cannot update itself…` | It was installed as a copy (`uv tool install`, `pip install`), which has no checkout to pull. Run the `.venv\Scripts\agent-terminal.exe` it names instead |
 
 The app checks `origin/main` at start and every half hour, from the checkout it runs
 from. Closing the window still ends everything, host included. If the window crashes,

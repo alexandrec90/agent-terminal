@@ -1,5 +1,6 @@
 // What the app says about itself, above the groups: an update to apply, a session host
-// to replace, how the last update went. Hidden when there is nothing to say.
+// to replace, how the last update went, or that this copy cannot update at all. Hidden
+// when there is nothing to say.
 
 function element(tag, className, text = "") {
   const node = document.createElement(tag);
@@ -38,6 +39,7 @@ export class AppBar {
     this.restart = restart;
     this.status = null;
     this.dismissed = false;
+    this.unmanagedDismissed = false;
     // "Restart sessions" ends every agent's turn, so it takes a second click.
     this.armed = false;
   }
@@ -48,9 +50,17 @@ export class AppBar {
   }
 
   rows() {
-    const { update, sessions, notice, restarting } = this.status;
+    const { update, sessions, notice, restarting, cannot_update } = this.status;
     if (restarting) return [row("Restarting…")];
     const rows = [];
+    if (cannot_update && !this.unmanagedDismissed) {
+      const close = button("×", () => {
+        this.unmanagedDismissed = true;
+        this.render();
+      });
+      close.title = "Dismiss until the app restarts";
+      rows.push(row(cannot_update, close));
+    }
     if (notice && !this.dismissed) {
       const close = button("×", () => {
         this.dismissed = true;

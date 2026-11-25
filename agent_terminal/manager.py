@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from agent_terminal import agents, folders, gitinfo
+from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit
 from agent_terminal.groups import Groups, open_folders, successor
 from agent_terminal.pr_board import BoardLinks, PrBoard
@@ -26,6 +26,16 @@ log = logging.getLogger(__name__)
 # Resuming every agent at once slows the machine to a crawl; a gap keeps it responsive.
 RESTORE_GAP_SECONDS = 0.3
 DEFAULT_SIZE = (32, 120)
+
+
+def switch_view(tabs: list[Tab], leaving: str | None, arriving: str | None) -> str | None:
+    """Move the user's eye from one tab to another, returning the new active id. Both
+    count as read: the one arrived at, and the one left, whose turn may have finished
+    while the user sat on it."""
+    for tab in tabs:
+        if tab.id in (leaving, arriving):
+            tab.attention = attention.seen(tab.attention)
+    return arriving
 
 
 class TabManager:
@@ -137,7 +147,7 @@ class TabManager:
 
     async def _open(self, tab: Tab) -> None:
         self._tabs.append(tab)
-        self._active_id = tab.id
+        self._active_id = switch_view(self._tabs, self._active_id, tab.id)
         self._groups.opened(tab.project_path)
         self.runner.add(tab)
         self._on_changed()
@@ -149,7 +159,7 @@ class TabManager:
         tab = self._pr_requests.tab_for_prompt(message)
         existing = next((t for t in self._tabs if t.session_id == tab.session_id), None)
         if existing is not None:
-            self._active_id = existing.id
+            self._active_id = switch_view(self._tabs, self._active_id, existing.id)
             self._on_changed()
             return
         await self._open(tab)
@@ -157,15 +167,18 @@ class TabManager:
     async def _close_tabs(self, leaving: list[Tab]) -> None:
         """Close one tab, or a group's at once. The active tab, if leaving, hands over to
         the nearest tab left, the next one first."""
-        self._active_id = successor(self._tabs, self._active_id, leaving)
+        heir = successor(self._tabs, self._active_id, leaving)
         gone = {tab.id for tab in leaving}
         self._tabs = [tab for tab in self._tabs if tab.id not in gone]
+        if heir != self._active_id:
+            self._active_id = switch_view(self._tabs, None, heir)
         stopping = [self._loop.create_task(self.runner.close(tab_id)) for tab_id in gone]
         self._on_changed()
         await asyncio.gather(*stopping)
 
     async def _on_activate(self, message: dict[str, Any]) -> None:
-        self._active_id = self._tab(message["id"]).id
+        arriving = self._tab(message["id"]).id
+        self._active_id = switch_view(self._tabs, self._active_id, arriving)
         self._on_changed()
 
     async def _on_toggle_park(self, message: dict[str, Any]) -> None:

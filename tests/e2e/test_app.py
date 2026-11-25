@@ -201,6 +201,10 @@ def test_a_tab_shows_when_its_agent_needs_the_user(tmp_path):
         assert await window.js(f"{style}.animationName") == "none", "a finished tab must not blink"
         assert await window.js(f"{style}.color") != asked_color, "the two must look different"
 
+        # Looked at, a finished turn has been read: the blue goes.
+        await window.js(f"document.querySelector('[data-id=\"{waiting}\"]').click()")
+        await window.wait_class(waiting, lacks("attention"), "cleared by viewing it")
+
     scenario(tmp_path, body)
 
 

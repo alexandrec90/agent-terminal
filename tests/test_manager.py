@@ -12,7 +12,7 @@ import pytest
 from agent_terminal import manager as module
 from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION, QUERY_REPLY
 from agent_terminal.desktop import Desktop, is_web_url
-from agent_terminal.manager import TabManager
+from agent_terminal.manager import TabManager, switch_view
 from agent_terminal.pty_session import SpawnError
 from agent_terminal.settings import Settings
 from agent_terminal.store import SAVE_DELAY_SECONDS, Snapshot, Tab, load_snapshot, save_snapshot
@@ -352,6 +352,57 @@ async def test_a_finished_turn_is_flagged_apart_from_a_question(rig):
     tab = await rig.create()
     await rig.output(tab["id"], status("working") + status("done"))
     assert rig.tabs()[0]["attention"] == FINISHED
+
+
+def test_switch_view_marks_both_ends_seen():
+    def tab(tab_id: str, flag: str) -> Tab:
+        return Tab(
+            id=tab_id,
+            project="p",
+            project_path="/p",
+            agent="claude",
+            created_at=0.0,
+            attention=flag,
+        )
+
+    tabs = [tab("a", FINISHED), tab("b", FINISHED), tab("c", FINISHED), tab("d", NEEDS_INPUT)]
+    assert switch_view(tabs, "a", "b") == "b"
+    assert [t.attention for t in tabs] == [NO_ATTENTION, NO_ATTENTION, FINISHED, NEEDS_INPUT]
+    assert switch_view(tabs, "b", "d") == "d"
+    assert tabs[3].attention == NEEDS_INPUT
+    assert switch_view(tabs, None, None) is None
+
+
+@run
+async def test_viewing_a_finished_tab_clears_its_flag(rig):
+    await rig.hello()
+    first = await rig.create()
+    await rig.create()
+    await rig.output(first["id"], status("working") + status("done"))
+    assert rig.tabs()[0]["attention"] == FINISHED
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[0]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_a_tab_that_finished_while_watched_is_read_once_left(rig):
+    await rig.hello()
+    first = await rig.create()
+    second = await rig.create()
+    await rig.output(second["id"], status("working") + status("done"))
+    assert rig.tabs()[1]["attention"] == FINISHED, "still flagged while it is on screen"
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[1]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_viewing_a_question_leaves_it_flagged(rig):
+    await rig.hello()
+    first = await rig.create()
+    await rig.create()
+    await rig.output(first["id"], status("working") + status("blocked"))
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[0]["attention"] == NEEDS_INPUT
 
 
 @run

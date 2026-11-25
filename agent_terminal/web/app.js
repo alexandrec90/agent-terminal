@@ -1,7 +1,8 @@
+import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
 import { ReviewPanel } from "./review.js";
-import { renderSidebar } from "./sidebar.js";
+import { refreshTimes, renderSidebar } from "./sidebar.js";
 import { Terminals } from "./terminals.js";
 
 const groups = document.getElementById("groups");
@@ -9,8 +10,34 @@ const empty = document.getElementById("empty");
 
 let tabs = [];
 let prs = [];
+let groupOrder = [];
 let activeId = null;
+let folded = new Set();
+let hidden = new Set();
 let synced = false;
+// Mid-drag, a redraw would take the dragged row away: hold it until the drop.
+let dragging = false;
+let renderHeld = false;
+
+// Each "… ago" in the sidebar moves on by itself; a minute is its smallest step.
+const TIME_REFRESH_MS = 30_000;
+
+function plural(count, word) {
+  return count === 1 ? `${count} ${word}` : `${count} ${word}s`;
+}
+
+// Closing sessions ends their agents; they resume only from the agent's own history.
+function closeGroup(entry) {
+  const close = () => send({ type: "close_group", path: entry.path });
+  if (entry.tabs.length === 0) {
+    close();
+    return;
+  }
+  const working = entry.tabs.filter((tab) => tab.status === "working").length;
+  const lines = [`Close ${plural(entry.tabs.length, "session")} in ${entry.name}?`];
+  if (working) lines.push(`${plural(working, "agent")} still working will be stopped.`);
+  confirmAction(lines, "Close group", close);
+}
 
 const actions = {
   activate: (id) => {
@@ -21,7 +48,15 @@ const actions = {
   },
   close: (id) => send({ type: "close", id }),
   togglePark: (id) => send({ type: "toggle_park", id }),
+  moveTab: (id, before) => send({ type: "move_tab", id, before }),
+  orderGroups: (paths) => send({ type: "order_groups", paths }),
+  dragging: (active) => {
+    dragging = active;
+    if (!active && renderHeld) render();
+  },
   newInFolder: (entry) => dialog.open({ path: entry.path, name: entry.name }),
+  toggleGroup: (path) => send({ type: "fold_group", path, folded: !folded.has(path) }),
+  closeGroup,
   review: (pr) => {
     // Out of the terminal underneath, or typing here would reach its agent unseen.
     document.activeElement?.blur();
@@ -37,6 +72,10 @@ const dialog = new NewTabDialog({
   prepare: (path) => send({ type: "prepare_worktree", path }),
   listPast: (path) => send({ type: "past_sessions", path }),
   resume: (choice) => send({ type: "resume_session", ...choice }),
+  listRemote: () => send({ type: "list_remote_repos" }),
+  clone: (fullName) => send({ type: "clone_repo", full_name: fullName }),
+  describeDeletion: (path) => send({ type: "describe_deletion", path }),
+  deleteProject: (path) => send({ type: "delete_project", path }),
 });
 
 const review = new ReviewPanel(document.getElementById("review"), {
@@ -67,8 +106,10 @@ function linkedTab() {
 }
 
 function render() {
-  const view = { activeId: review.pr ? null : activeId, reviewing: review.pr };
-  renderSidebar(groups, tabs, prs, view, actions);
+  renderHeld = dragging;
+  if (dragging) return;
+  const view = { activeId: review.pr ? null : activeId, reviewing: review.pr, folded, hidden };
+  renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
   empty.hidden = tabs.length > 0 || review.pr !== null;
 }
@@ -83,6 +124,9 @@ function applyState(state) {
   }
   tabs = state.tabs;
   prs = state.prs;
+  groupOrder = state.group_order ?? [];
+  folded = new Set(state.folded);
+  hidden = new Set(state.hidden);
   if (state.active_id !== activeId) review.close();
   activeId = state.active_id;
   synced = true;
@@ -116,6 +160,18 @@ function onMessage(message) {
     case "picked":
       dialog.setPicked(message.path);
       break;
+    case "remote_repos":
+      dialog.remote.setRepos(message);
+      break;
+    case "cloned":
+      dialog.remote.setCloned(message);
+      break;
+    case "deletion":
+      dialog.setDeletion(message);
+      break;
+    case "deleted":
+      dialog.setDeleted(message);
+      break;
     case "pr_detail":
       review.setDetail(message);
       break;
@@ -131,10 +187,14 @@ function onMessage(message) {
 window.__agentTerminal = {
   ready: () => synced,
   screen: (id) => terminals.screenText(id),
+  promptShade: (id) => terminals.promptShade(id),
+  mouseMode: (id) => terminals.mouseMode(id),
   send,
   tabs: () => tabs,
   prs: () => prs,
 };
+
+setInterval(() => refreshTimes(groups), TIME_REFRESH_MS);
 
 document.getElementById("new-group").addEventListener("click", () => dialog.open());
 document.getElementById("empty-new").addEventListener("click", () => dialog.open());

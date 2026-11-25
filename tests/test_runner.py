@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,45 @@ def test_a_status_change_is_announced_once(tmp_path):
     run(tmp_path, body)
 
 
+def test_a_change_the_user_set_going_stamps_the_tab(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent_terminal.runner.time.time", lambda: 1234.0)
+
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        rig.runner.input("t", "fix it\r")
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at == 1234.0
+
+    run(tmp_path, body)
+
+
+def test_a_change_before_the_user_types_leaves_the_stamp(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        # A restored session settling, or Codex's `working` on every start.
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        rig.runner.receive(live, "\x1b]7501;state=idle:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at is None
+
+    run(tmp_path, body)
+
+
+def test_a_repeated_state_leaves_the_stamp(tmp_path, monkeypatch):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        rig.runner.input("t", "x")
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        monkeypatch.setattr("agent_terminal.runner.time.time", lambda: 9999.0)
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at != 9999.0
+
+    run(tmp_path, body)
+
+
 def test_output_from_a_closed_tab_changes_nothing(tmp_path):
     async def body(rig: Rig) -> None:
         live = rig.runner.add(make_tab(tmp_path))
@@ -163,7 +203,7 @@ def test_output_from_a_process_since_replaced_is_dropped(tmp_path):
 def test_closing_during_the_swap_starts_nothing(tmp_path):
     async def body(rig: Rig) -> None:
         tab = make_tab(tmp_path)
-        tab.worktree_name = "tab-1"
+        tab.worktree = True
         live = rig.runner.add(tab)
         reopening = asyncio.create_task(rig.runner._reopen(live))
         await asyncio.sleep(0)
@@ -189,6 +229,91 @@ def test_close_all_empties_the_table(tmp_path):
         assert rig.runner.live == {}
 
     run(tmp_path, body)
+
+
+def write_transcript(tmp_path: Path, session_id: str, tree: str) -> None:
+    """Claude's transcript as `claude -w` begins it; the rig's Claude home is `tmp_path`."""
+    directory = tmp_path / "projects" / "C--encoded"
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {"type": "worktree-state", "worktreeSession": {"worktreePath": tree}}
+    (directory / f"{session_id}.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def claude_worktree_tab(tmp_path: Path) -> Tab:
+    tab = make_tab(tmp_path)
+    tab.worktree = True
+    tab.session_id = "s-1"
+    return tab
+
+
+def test_the_worktree_claude_named_is_recorded_once_it_says_so(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(claude_worktree_tab(tmp_path))
+        write_transcript(tmp_path, "s-1", "C:\\repo\\.claude\\worktrees\\calm-otter")
+        rig.runner.receive(live, "\x1b]7501;state=working\x1b\\")
+        await settle(lambda: live.tab.cwd is not None)
+        assert live.tab.cwd == "C:\\repo\\.claude\\worktrees\\calm-otter"
+        assert len(rig.changes) == 2  # the status, then the folder
+
+    run(tmp_path, body)
+
+
+def test_a_tree_not_yet_written_is_looked_for_again(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(claude_worktree_tab(tmp_path))
+        rig.runner.receive(live, "\x1b]7501;state=working\x1b\\")
+        await settle(lambda: not rig.runner._finding_trees)
+        assert live.tab.cwd is None
+        write_transcript(tmp_path, "s-1", "C:\\tree")
+        rig.runner.receive(live, "\x1b]7501;state=idle\x1b\\")
+        await settle(lambda: live.tab.cwd is not None)
+        assert live.tab.cwd == "C:\\tree"
+
+    run(tmp_path, body)
+
+
+def test_a_tab_with_a_known_folder_or_no_worktree_is_not_searched(tmp_path):
+    async def body(rig: Rig) -> None:
+        known = claude_worktree_tab(tmp_path)
+        known.cwd = "C:\\known"
+        plain = make_tab(tmp_path)
+        plain.id, plain.session_id = "p", "s-2"
+        write_transcript(tmp_path, "s-1", "C:\\other")
+        write_transcript(tmp_path, "s-2", "C:\\other")
+        for tab in (known, plain):
+            rig.runner.receive(rig.runner.add(tab), "\x1b]7501;state=working\x1b\\")
+        await asyncio.sleep(0.05)
+        assert (known.cwd, plain.cwd) == ("C:\\known", None)
+
+    run(tmp_path, body)
+
+
+def test_one_search_at_a_time_per_tab(tmp_path):
+    async def body(rig: Rig) -> None:
+        tab = claude_worktree_tab(tmp_path)
+        rig.runner._finding_trees.add(tab.id)
+        rig.runner._look_for_claude_tree(tab)
+        await asyncio.sleep(0.01)
+        assert rig.runner._finding_trees == {tab.id}  # the running search still owns it
+
+    run(tmp_path, body)
+
+
+def test_a_tab_without_a_session_is_not_searched(tmp_path):
+    async def body(rig: Rig) -> None:
+        tab = make_tab(tmp_path)
+        tab.worktree = True
+        rig.runner._look_for_claude_tree(tab)
+        assert rig.runner._finding_trees == set()
+
+    run(tmp_path, body)
+
+
+async def settle(condition) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
 
 
 def test_find_unfound_sessions_skips_tabs_that_know_theirs(tmp_path):

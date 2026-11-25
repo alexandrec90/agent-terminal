@@ -27,16 +27,18 @@ class Tab:
     agent: str
     created_at: float
     worktree: bool = False
-    # Claude's worktree name, chosen here so the tab can find the directory again.
-    worktree_name: str | None = None
     # Claude's is chosen up front; Codex's is read from its rollout once it exists.
     session_id: str | None = None
     # The agent's working directory once known, for a worktree the project path is not it.
+    # Each agent names its own worktree, so this is read back from the agent's records.
     cwd: str | None = None
     title: str = ""
     parked: bool = False
     # "", "input" or "finished": see `attention.Presence`.
     attention: str = ""
+    # When the session last did something the user set going; None until it has, when
+    # the page shows `created_at` instead.
+    updated_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +50,21 @@ class Snapshot:
 
     tabs: list[Tab] = field(default_factory=list)
     active_id: str | None = None
+    # The sidebar's group order, by project path. A group not named here comes after
+    # these, in the order it first appeared.
+    group_order: list[str] = field(default_factory=list)
+    # Group folders, by path: those folded to their heading, and those closed while they
+    # held only PRs, which stay out of the sidebar until a session opens there.
+    folded: list[str] = field(default_factory=list)
+    hidden: list[str] = field(default_factory=list)
+
+
+def paths_of(value: object) -> list[str]:
+    """A saved list of folder paths. Anything else, as a file from before it was kept,
+    is no paths at all rather than a reason to lose every tab."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -55,6 +72,10 @@ def tab_from_dict(data: dict[str, Any]) -> Tab:
     required key raises `TypeError`."""
     known = {f.name for f in fields(Tab)}
     tab = Tab(**{key: value for key, value in data.items() if key in known})
+    legacy_name = data.get("worktree_name")
+    if isinstance(legacy_name, str) and legacy_name and not tab.cwd:
+        # Saved when this app named Claude's worktrees: the folder followed from the name.
+        tab.cwd = str(Path(tab.project_path) / ".claude" / "worktrees" / legacy_name)
     if isinstance(tab.attention, bool):
         # Saved before the two kinds were told apart. Which it was is lost, so take the
         # louder: a tab that only finished costs a look, a missed question costs the work.
@@ -72,7 +93,21 @@ def parse_snapshot(text: str) -> Snapshot:
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"malformed tab record: {exc}") from exc
     active = data.get("active_id")
-    return Snapshot(tabs=tabs, active_id=active if isinstance(active, str) else None)
+    return Snapshot(
+        tabs=tabs,
+        active_id=active if isinstance(active, str) else None,
+        group_order=clean_group_order(data.get("group_order")),
+        folded=paths_of(data.get("folded")),
+        hidden=paths_of(data.get("hidden")),
+    )
+
+
+def clean_group_order(value: object) -> list[str]:
+    """`value` as a group order: its strings, each once, in order. Anything that is not a
+    list is no order at all, which a file written before there was one also holds."""
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(item for item in value if isinstance(item, str)))
 
 
 def load_snapshot(path: Path) -> Snapshot:
@@ -96,7 +131,10 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
     payload = {
         "version": SCHEMA_VERSION,
         "active_id": snapshot.active_id,
+        "group_order": snapshot.group_order,
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
+        "folded": snapshot.folded,
+        "hidden": snapshot.hidden,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

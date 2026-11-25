@@ -103,7 +103,6 @@ class PrRequests:
         found = self._board.prompt_of(repository, number)
         if found is None:
             raise ValueError(f"no session for PR {number}")
-        in_claude_tree = found.tree.parent == repository / ".claude" / "worktrees"
         return Tab(
             id=uuid.uuid4().hex,
             project=display_name(repository),
@@ -111,7 +110,6 @@ class PrRequests:
             agent=found.prompt.agent,
             created_at=time.time(),
             worktree=True,
-            worktree_name=found.tree.name if in_claude_tree else None,
             session_id=found.prompt.session_id,
             cwd=str(found.tree),
             title=self._board.title_of(repository, number),

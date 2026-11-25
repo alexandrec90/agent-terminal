@@ -171,6 +171,26 @@ class TestGh:
         gh.close(tmp_path, 505)
         assert run.calls == [["gh", "pr", "close", "505"]]
 
+    def test_lists_the_users_repositories(self, gh, run, tmp_path):
+        run.replies["list"] = "[]"
+        assert gh.list_repos(tmp_path) == "[]"
+        call = run.calls[0]
+        assert call[:3] == ["gh", "repo", "list"]
+        assert call[call.index("--json") + 1] == prs.REPO_FIELDS
+
+    def test_clones_into_the_folder_given_with_time_to_finish(self, gh, tmp_path, monkeypatch):
+        seen: list[dict] = []
+
+        def fake(argv, **kwargs):
+            seen.append({"argv": argv, **kwargs})
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(prs.subprocess, "run", fake)
+        gh.clone("me/thing", tmp_path / "thing")
+        assert seen[0]["argv"] == ["gh", "repo", "clone", "me/thing", str(tmp_path / "thing")]
+        assert seen[0]["cwd"] == tmp_path
+        assert seen[0]["timeout"] == prs.CLONE_TIMEOUT_SECONDS > prs.GH_TIMEOUT_SECONDS
+
     def test_a_failure_carries_ghs_words(self, gh, tmp_path, monkeypatch):
         fake = FakeRun(code=1, stderr="Pull request is in clean status but not mergeable")
         monkeypatch.setattr(prs.subprocess, "run", fake)

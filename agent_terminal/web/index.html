@@ -46,6 +46,14 @@
             />
             <button type="button" id="folder-browse">Browse…</button>
           </div>
+          <p id="project-message" hidden></p>
+          <button type="button" id="remote-toggle" aria-expanded="false">
+            Clone one of your GitHub repositories…
+          </button>
+          <div id="remote" hidden>
+            <p id="remote-status"></p>
+            <div id="remote-list"></div>
+          </div>
         </fieldset>
 
         <fieldset id="resume-field" hidden>
@@ -82,7 +90,7 @@
     </dialog>
 
     <dialog id="confirm">
-      <p id="confirm-text"></p>
+      <div id="confirm-text"></div>
       <div class="actions">
         <button type="button" id="confirm-cancel">Cancel</button>
         <button type="button" id="confirm-ok" class="primary"></button>

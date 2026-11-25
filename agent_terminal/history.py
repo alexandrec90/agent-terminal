@@ -219,9 +219,6 @@ def deployed_commits(board: PrBoard, facts: Iterable[TreeFacts]) -> dict[str, bo
 def tab_for(session: PastSession, folder: Path) -> Tab:
     """A tab resuming `session` in `folder`'s group."""
     repository = gitinfo.main_checkout(folder)
-    in_claude_tree = (
-        repository is not None and session.tree.parent == repository / ".claude" / "worktrees"
-    )
     return Tab(
         id=uuid.uuid4().hex,
         project=display_name(folder),
@@ -229,7 +226,6 @@ def tab_for(session: PastSession, folder: Path) -> Tab:
         agent=session.agent,
         created_at=time.time(),
         worktree=repository is not None and session.tree not in (repository, folder),
-        worktree_name=session.tree.name if in_claude_tree else None,
         session_id=session.session_id,
         cwd=str(session.tree),
         title=session.title,

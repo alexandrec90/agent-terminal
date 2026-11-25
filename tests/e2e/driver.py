@@ -87,6 +87,25 @@ class Window:
             "new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))"
         )
 
+    async def drag(self, source: str, target: str, *, below: bool = False) -> None:
+        """Drag `source` onto the top or bottom quarter of `target`, through the events
+        the browser sends for a real drag."""
+        await self.js(
+            "(() => {"
+            f" const source = document.querySelector({json.dumps(source)});"
+            f" const target = document.querySelector({json.dumps(target)});"
+            " const box = target.getBoundingClientRect();"
+            f" const y = box.top + box.height * ({'0.75' if below else '0.25'});"
+            " const dataTransfer = new DataTransfer();"
+            " const send = (element, type) => element.dispatchEvent(new DragEvent(type,"
+            "  {bubbles: true, cancelable: true, clientX: box.left + 4, clientY: y, dataTransfer}));"
+            " send(source, 'dragstart');"
+            " send(target, 'dragover');"
+            " send(target, 'drop');"
+            " send(source, 'dragend');"
+            "})()"
+        )
+
     async def screenshot(self, path: Path) -> None:
         shot = await self._call("Page.captureScreenshot", format="png")
         await asyncio.to_thread(path.write_bytes, base64.b64decode(shot["data"]))
@@ -118,11 +137,17 @@ class Window:
         """Wait for the backend's answer about the chosen folder."""
         await self.wait("!document.getElementById('new-tab-start').disabled", "the folder's facts")
 
-    async def start_session(self, agent: str = "claude", worktree: bool = False) -> None:
+    async def set_worktree(self, on: bool) -> None:
+        """Click the worktree box only if it is not already as wanted: it starts checked."""
+        if await self.js("document.getElementById('worktree').checked") != on:
+            await self.click("#worktree")
+
+    async def start_session(self, agent: str = "claude", worktree: bool | None = False) -> None:
+        """Start from the dialog; `worktree=None` leaves the box as it stands."""
         await self.dialog_ready()
         await self.click(f"input[name=agent][value={agent}]")
-        if worktree:
-            await self.click("#worktree")
+        if worktree is not None:
+            await self.set_worktree(worktree)
         await self.click("#new-tab-start")
 
     async def new_tab(self, project: str, agent: str = "claude", worktree: bool = False) -> None:
@@ -172,6 +197,7 @@ class App:
         self.claude_config = base / "claude.json"
         self.gh_state = base / "fake-gh.json"
         self.gh_log = base / "fake-gh.log"
+        self.gh_repos = base / "fake-gh-repos.json"
         self.port = free_port()
         self.real_agents = real_agents
         self.process: subprocess.Popen[bytes] | None = None
@@ -195,6 +221,7 @@ class App:
             env["AGENT_TERMINAL_PR_POLL_SECONDS"] = "1"
             env["FAKE_GH_STATE"] = str(self.gh_state)
             env["FAKE_GH_LOG"] = str(self.gh_log)
+            env["FAKE_GH_REPOS"] = str(self.gh_repos)
             env.update(GIT_IDENTITY)
         return env
 

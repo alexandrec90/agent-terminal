@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,8 +9,10 @@ from agent_terminal.store import (
     DebouncedSaver,
     Snapshot,
     Tab,
+    clean_group_order,
     load_snapshot,
     parse_snapshot,
+    paths_of,
     save_snapshot,
     tab_from_dict,
 )
@@ -28,7 +31,7 @@ def make_tab(**fields) -> Tab:
 
 def test_a_snapshot_round_trips(tmp_path):
     path = tmp_path / "state.json"
-    tab = make_tab(parked=True, attention="input", session_id="s", worktree_name="w", worktree=True)
+    tab = make_tab(parked=True, attention="input", session_id="s", cwd="C:\\w", worktree=True)
     save_snapshot(path, Snapshot(tabs=[tab], active_id="a"))
     assert load_snapshot(path) == Snapshot(tabs=[tab], active_id="a")
 
@@ -77,9 +80,89 @@ def test_a_non_string_active_id_is_dropped():
     assert parse_snapshot(text).active_id is None
 
 
+def test_folded_and_hidden_groups_round_trip(tmp_path):
+    path = tmp_path / "state.json"
+    snapshot = Snapshot(folded=["C:\\a"], hidden=["C:\\b", "C:\\c"])
+    save_snapshot(path, snapshot)
+    assert load_snapshot(path) == snapshot
+
+
+def test_a_file_from_before_groups_were_kept_has_none():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "active_id": None})
+    snapshot = parse_snapshot(text)
+    assert (snapshot.folded, snapshot.hidden) == ([], [])
+
+
+def test_odd_group_lists_cost_the_groups_not_the_tabs():
+    text = json.dumps(
+        {
+            "version": SCHEMA_VERSION,
+            "tabs": [make_tab().to_dict()],
+            "folded": "C:\\a",
+            "hidden": [1, "C:\\b"],
+        }
+    )
+    snapshot = parse_snapshot(text)
+    assert snapshot.tabs == [make_tab()]
+    assert (snapshot.folded, snapshot.hidden) == ([], ["C:\\b"])
+
+
+@pytest.mark.parametrize(
+    ("saved", "read"),
+    [(["C:\\a"], ["C:\\a"]), (None, []), ("C:\\a", []), ({"C:\\a": 1}, []), ([1, None], [])],
+)
+def test_paths_of(saved, read):
+    assert paths_of(saved) == read
+
+
 def test_a_key_from_another_version_is_ignored():
     data = {**make_tab().to_dict(), "from_the_future": True}
     assert tab_from_dict(data) == make_tab()
+
+
+def test_the_group_order_and_last_update_round_trip(tmp_path):
+    path = tmp_path / "state.json"
+    snapshot = Snapshot(tabs=[make_tab(updated_at=5.0)], group_order=["C:\\b", "C:\\demo"])
+    save_snapshot(path, snapshot)
+    assert load_snapshot(path) == snapshot
+
+
+def test_a_file_from_before_group_order_reads_as_none():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [make_tab().to_dict()]})
+    snapshot = parse_snapshot(text)
+    assert snapshot.group_order == []
+    assert snapshot.tabs[0].updated_at is None
+
+
+@pytest.mark.parametrize(
+    ("saved", "read"),
+    [
+        ("C:\\a", []),
+        (None, []),
+        (["C:\\a", 3, "C:\\b", "C:\\a"], ["C:\\a", "C:\\b"]),
+    ],
+)
+def test_a_malformed_group_order_keeps_only_its_paths(saved, read):
+    assert clean_group_order(saved) == read
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "group_order": saved})
+    assert parse_snapshot(text).group_order == read
+
+
+def test_a_worktree_this_app_once_named_becomes_its_folder():
+    record = {**make_tab(worktree=True).to_dict(), "worktree_name": "tab-1a2b3c4d"}
+    expected = Path("C:\\demo") / ".claude" / "worktrees" / "tab-1a2b3c4d"
+    assert tab_from_dict(record).cwd == str(expected)
+
+
+def test_a_recorded_folder_outranks_an_old_name():
+    record = {**make_tab(cwd="C:\\found").to_dict(), "worktree_name": "tab-1a2b3c4d"}
+    assert tab_from_dict(record).cwd == "C:\\found"
+
+
+@pytest.mark.parametrize("name", [None, "", 7])
+def test_an_empty_or_odd_old_name_is_ignored(name):
+    record = {**make_tab().to_dict(), "worktree_name": name}
+    assert tab_from_dict(record).cwd is None
 
 
 @pytest.mark.parametrize(("saved", "read"), [(True, "input"), (False, "")])

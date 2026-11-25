@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from driver import GIT_IDENTITY, App, Window
+from fake_agent import PROMPT
 
 from agent_terminal import clipboard
 
@@ -201,6 +202,10 @@ def test_a_tab_shows_when_its_agent_needs_the_user(tmp_path):
         assert await window.js(f"{style}.animationName") == "none", "a finished tab must not blink"
         assert await window.js(f"{style}.color") != asked_color, "the two must look different"
 
+        # Looked at, a finished turn has been read: the blue goes.
+        await window.js(f"document.querySelector('[data-id=\"{waiting}\"]').click()")
+        await window.wait_class(waiting, lacks("attention"), "cleared by viewing it")
+
     scenario(tmp_path, body)
 
 
@@ -237,6 +242,7 @@ def test_groups_follow_their_sessions(tmp_path):
         assert await window.js("document.getElementById('project-field').hidden") is True
         await window.dialog_ready()
         assert await window.js("document.getElementById('worktree').disabled") is False
+        assert await window.js("document.getElementById('worktree').checked") is True
         await window.start_session("codex")
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 2", "a second tab in the group")
@@ -248,19 +254,178 @@ def test_groups_follow_their_sessions(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_tabs_and_groups_are_reordered_by_dragging(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        first = await open_tab(window, "alpha")
+        second = await open_tab(window, "alpha")
+        other = await open_tab(window, "beta")
+        groups = "[...document.querySelectorAll('.group')].map(g => g.dataset.project)"
+        alpha_tabs = "[...document.querySelectorAll('[data-project=\"alpha\"] .tab')]"
+        order = f"{alpha_tabs}.map(t => t.dataset.id)"
+        assert await window.js(order) == [first, second]
+
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]')
+        await window.wait(f"{order}[0] === {json.dumps(second)}", "the tab dragged up")
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]', below=True)
+        await window.wait(f"{order}[0] === {json.dumps(first)}", "the tab dragged back down")
+
+        # Out of its group it will not go: the drop is refused and nothing moves.
+        await window.drag(f'[data-id="{first}"]', f'[data-id="{other}"]')
+        await asyncio.sleep(0.5)
+        assert await window.js(order) == [first, second]
+        assert await window.js(
+            f"{json.dumps(first)} === document.querySelector("
+            "'[data-project=\"alpha\"] .tab').dataset.id"
+        )
+
+        await window.drag('[data-project="beta"] .group-head', '[data-project="alpha"]')
+        await window.wait(f"{groups}[0] === 'beta'", "the group dragged up")
+        assert await window.js(groups) == ["beta", "alpha"]
+        assert (
+            await window.js(
+                "document.querySelectorAll('.dragging, .drop-before, .drop-after').length"
+            )
+            == 0
+        )
+
+    scenario(tmp_path, body)
+
+
+def test_a_group_folds_to_its_heading_and_back(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        await open_tab(window, "alpha")
+        await window.click('[data-project="alpha"] .group-head')
+        folded = "document.querySelector('[data-project=\"alpha\"]').classList.contains('folded')"
+        await window.wait(folded, "the group to fold")
+        assert (
+            await window.js("document.querySelectorAll('[data-project=\"alpha\"] .tab').length")
+            == 0
+        )
+        assert await window.js("document.querySelector('.group-count').textContent") == "1"
+
+        # The "+" in a folded heading opens the dialog without unfolding by itself.
+        await window.click('[data-project="alpha"] .group-add')
+        assert await window.js(folded) is True
+        await window.click("#new-tab-cancel")
+
+        await window.click('[data-project="alpha"] .group-head')
+        count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
+        await window.wait(f"{count} === 1", "the group to unfold")
+
+    scenario(tmp_path, body)
+
+
+def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        label = f"document.querySelector('[data-id=\"{tab}\"] .tab-time')"
+        assert await window.js(f"{label}.textContent") == "just now"
+        await window.type_into(tab, "finish\r")
+        await window.wait_class(tab, has("finished"), "a turn finished")
+        assert await window.js(f"{label}.textContent") == "just now"
+
+        cases = {
+            "30": "just now",
+            "90": "1 minute ago",
+            str(5 * 3600): "5 hours ago",
+            str(86400): "1 day ago",
+            str(7 * 86400): "1 week ago",
+            str(15 * 86400): "2 weeks ago",
+            str(60 * 86400): "2 months ago",
+            str(400 * 86400): "1 year ago",
+            "-5": "just now",
+        }
+        labels = await window.js(
+            "import('./sidebar.js').then(m => "
+            f"{json.dumps(list(cases))}.map(s => m.timeAgo(1000, 1000 + Number(s))))"
+        )
+        assert labels == list(cases.values())
+
+    scenario(tmp_path, body)
+
+
+def test_closing_a_group_asks_then_closes_every_session_in_it(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        kept = await open_tab(window, "beta")
+        await open_tab(window, "alpha")
+        await open_tab(window, "alpha")
+        await window.click('[data-project="alpha"] .group-close')
+        assert await window.js("document.getElementById('confirm').open") is True
+        await window.click("#confirm-cancel")
+        assert len(await window.tabs()) == 3
+
+        await window.click('[data-project="alpha"] .group-close')
+        await window.click("#confirm-ok")
+        await window.wait("window.__agentTerminal.tabs().length === 1", "the group's tabs to close")
+        assert [tab["id"] for tab in await window.tabs()] == [kept]
+        groups = "[...document.querySelectorAll('.group')].map(g => g.dataset.project)"
+        assert await window.js(groups) == ["beta"]
+
+    scenario(tmp_path, body)
+
+
+def test_a_repository_on_github_can_be_cloned_from_the_dialog(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        records = [
+            {"name": name, "nameWithOwner": f"me/{name}", "description": "", "isArchived": False}
+            for name in ("alpha", "gamma")
+        ]
+        app.gh_repos.write_text(json.dumps(records), encoding="utf-8")
+        await window.click("#new-group")
+        await window.click("#remote-toggle")
+        rows = "[...document.querySelectorAll('.remote-repo')].map(r => r.dataset.repo)"
+        await window.wait(f"{rows}.length", "the user's repositories")
+        assert await window.js(rows) == ["me/gamma"], "alpha is already here"
+
+        await window.click('[data-repo="me/gamma"] .remote-clone')
+        await window.wait(f"{rows}.length === 0", "the clone to finish")
+        assert (app.projects / "gamma" / ".git").is_dir()
+        selected = "document.querySelector('.project.selected')?.textContent"
+        assert await window.wait(selected, "the clone to be chosen") == "gamma"
+        await window.start_session()
+        await window.wait("window.__agentTerminal.tabs().length === 1", "a session in the clone")
+
+    scenario(tmp_path, body)
+
+
+def test_deleting_a_project_says_what_is_unsaved_and_refuses_one_in_use(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        await open_tab(window, "alpha")
+        await window.click("#new-group")
+        delete = "[...document.querySelectorAll('.project-item')].find(i => i.textContent === {0}).querySelector('.project-delete').click()"
+        await window.js(delete.format(json.dumps("beta")))
+        await window.wait("document.getElementById('confirm').open", "the confirmation")
+        text = await window.js("document.getElementById('confirm-text').textContent")
+        assert "Recycle Bin" in text
+        assert "isn't a git repository" in text
+        # Cancelled: nothing here may reach the real Recycle Bin.
+        await window.click("#confirm-cancel")
+
+        await window.js(delete.format(json.dumps("alpha")))
+        message = "document.getElementById('project-message')"
+        await window.wait(f"!{message}.hidden", "the refusal")
+        assert "close it first" in await window.js(f"{message}.textContent")
+        assert await window.js("document.getElementById('confirm').open") is False
+
+    scenario(tmp_path, body)
+
+
 def test_a_folder_outside_git_says_why_and_can_be_made_ready(tmp_path):
     async def body(_app: App, window: Window) -> None:
         (tmp_path / "projects" / "beta" / "kept.txt").write_text("x", encoding="utf-8")
         await window.choose_project("beta")
         assert await window.js("document.getElementById('worktree').disabled") is True
+        assert await window.js("document.getElementById('worktree').checked") is False
         assert "isn't one" in await window.notes()
 
         await window.click("#prepare-worktree")
         await window.wait("!document.getElementById('worktree').disabled", "git to be set up")
         assert "isn't one" not in await window.notes()
         assert await window.js("document.getElementById('prepare-worktree').hidden") is True
+        # The default comes back once the folder can take a worktree.
+        assert await window.js("document.getElementById('worktree').checked") is True
 
-        await window.start_session(worktree=True)
+        await window.start_session(worktree=None)
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         assert (await window.tabs())[0]["worktree"] is True
 
@@ -293,13 +458,42 @@ def test_a_session_can_be_scoped_to_any_folder(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_the_dialog_holds_its_size_and_shows_the_whole_selection(tmp_path):
+    rect = "document.getElementById({}).getBoundingClientRect()"
+
+    async def body(_app: App, window: Window) -> None:
+        repository = tmp_path / "untrusted"
+        make_repository(repository)
+        await window.click("#new-group")
+        before = await window.js(f"{rect.format(json.dumps('new-tab'))}.toJSON()")
+
+        await window.type_path(str(repository))
+        await window.wait("!document.getElementById('folder-notes').hidden", "the trust note")
+        after = await window.js(f"{rect.format(json.dumps('new-tab'))}.toJSON()")
+        assert (after["top"], after["height"]) == (before["top"], before["height"])
+
+        # The list scrolls, so it clips: the selected outline (2px) must fit inside it.
+        await window.js("document.getElementById('new-tab').close()")
+        await window.choose_project("alpha")
+        fits = await window.js(
+            "(() => { const list = document.getElementById('project-list')"
+            ".getBoundingClientRect();"
+            "const b = document.querySelector('.project.selected').getBoundingClientRect();"
+            "return b.left - 2 >= list.left && b.right + 2 <= list.right"
+            " && b.top - 2 >= list.top; })()"
+        )
+        assert fits is True
+
+    scenario(tmp_path, body)
+
+
 def test_a_first_visit_asks_for_trust_then_loops_back_to_the_worktree(tmp_path):
     async def body(app: App, window: Window) -> None:
         repository = tmp_path / "untrusted"
         make_repository(repository)
         await window.choose_path(repository)
         await window.dialog_ready()
-        await window.click("#worktree")
+        await window.set_worktree(True)
         await window.wait("document.getElementById('folder-notes').textContent", "a warning")
         assert "worktree starts right after" in await window.notes()
 
@@ -311,7 +505,7 @@ def test_a_first_visit_asks_for_trust_then_loops_back_to_the_worktree(tmp_path):
         assert "Codex will ask" in await window.notes()
         assert "starts right after" not in await window.notes()
 
-        await window.start_session(worktree=False)
+        await window.start_session(worktree=None)
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         tab = (await window.tabs())[0]
         assert tab["worktree"] is True, "the toggle set above must have carried through"
@@ -340,7 +534,7 @@ def test_a_declined_trust_screen_says_so_and_leaves_a_shell(tmp_path):
         make_repository(repository)
         await window.choose_path(repository)
         await window.dialog_ready()
-        await window.click("#worktree")
+        await window.set_worktree(True)
         await window.click("#new-tab-start")
         await window.wait("window.__agentTerminal.tabs().length === 1", "the tab")
         tab = (await window.tabs())[0]
@@ -605,6 +799,42 @@ def test_right_click_in_a_terminal_pastes(tmp_path):
             await window.wait_class(tab, has("attention"), "the pasted command to run")
         finally:
             clipboard.write_text(saved)
+
+    scenario(tmp_path, body)
+
+
+def test_the_prompt_between_claudes_rules_is_shaded(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        shade = f"window.__agentTerminal.promptShade({json.dumps(tab)})"
+        assert await window.js(shade) is None, "nothing is boxed in before the prompt is drawn"
+        await window.type_into(tab, "compose\r")
+        rows = await window.wait(shade, "the prompt to be shaded")
+        assert rows["start"] == rows["end"], "only the prompt line lies between the rules"
+        screen = (await window.js(f"window.__agentTerminal.screen({json.dumps(tab)})")).split("\n")
+        assert screen[rows["start"]].startswith(PROMPT), screen
+
+    scenario(tmp_path, body)
+
+
+def test_right_click_leaves_the_paste_to_an_agent_tracking_the_mouse(tmp_path):
+    """Claude Code pastes on a right-click it is sent, so the app pasting too doubled it."""
+
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        mode = f"window.__agentTerminal.mouseMode({json.dumps(tab)})"
+        assert await window.js(mode) == "none"
+        await window.type_into(tab, "mouse\r")
+        await window.wait(f"{mode} !== 'none'", "the agent to turn mouse tracking on")
+        # What the page sends, recorded as it sends it: the paste request is synchronous.
+        await window.js(
+            "(() => { window.__sent = []; const send = WebSocket.prototype.send;"
+            " WebSocket.prototype.send = function (data) {"
+            " window.__sent.push(JSON.parse(data).type); return send.call(this, data); };"
+            " })()"
+        )
+        await window.right_click(".term-host.shown .xterm")
+        assert "paste" not in await window.js("window.__sent")
 
     scenario(tmp_path, body)
 

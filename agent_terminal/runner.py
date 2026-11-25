@@ -72,6 +72,7 @@ class TabRunner:
         self._kill = kill
         self._events = events
         self.live: dict[str, LiveTab] = {}
+        self._finding_trees: set[str] = set()
         self._finder = CodexSessionFinder(
             settings.codex_home, loop, self._claimed_sessions, events.changed
         )
@@ -109,7 +110,7 @@ class TabRunner:
         if launch.resumes or trust.is_trusted(self._settings, tab.agent, Path(launch.cwd)):
             return launch
         live.awaiting_trust = True
-        if tab.agent == agents.CLAUDE and tab.worktree_name:
+        if tab.agent == agents.CLAUDE and launch.makes_worktree:
             live.worktree_after_trust = True
             return agents.claude_trust_launch(tab, self._settings)
         return launch
@@ -201,10 +202,38 @@ class TabRunner:
                 self._past_trust(live, state)
             if tab.agent == agents.CODEX and not tab.session_id:
                 self._finder.look_for(tab, live.started_at)
+            if tab.agent == agents.CLAUDE and tab.worktree and not tab.cwd:
+                self._look_for_claude_tree(tab)
         title = attention.parse_title(payload)
         if title is not None:
             tab.title = attention.clean_title(title, tab.project) or tab.title
-        return before != (live.status, tab.attention, tab.parked, tab.title, live.awaiting_trust)
+        changed = before != (live.status, tab.attention, tab.parked, tab.title, live.awaiting_trust)
+        # Only once the user has typed here: a restored session settling, or Codex saying
+        # `working` on every start, is the app's doing and not news.
+        if changed and live.user_engaged:
+            tab.updated_at = time.time()
+        return changed
+
+    def _look_for_claude_tree(self, tab: Tab) -> None:
+        """Start a search unless one is running. Claude writes its transcript on the
+        first message, so a tab not found now is looked for on its next status change."""
+        if tab.id in self._finding_trees or not tab.session_id:
+            return
+        self._finding_trees.add(tab.id)
+        self._loop.create_task(self.find_claude_tree(tab, tab.session_id))
+
+    async def find_claude_tree(self, tab: Tab, session_id: str) -> None:
+        """Record the worktree Claude named for itself, once its transcript says where."""
+        find = agents.claude_session_tree
+        try:
+            tree = await self._loop.run_in_executor(
+                None, find, self._settings.claude_home, session_id
+            )
+        finally:
+            self._finding_trees.discard(tab.id)
+        if tree and not tab.cwd:
+            tab.cwd = tree
+            self._events.changed()
 
     def _past_trust(self, live: LiveTab, state: str) -> None:
         """The agent's first state answers its trust screen: `clear` if it was declined,

@@ -1,7 +1,8 @@
 // The sessions a group's "+" offers to bring back: those on disk in the project's folders
 // that no tab has open. Titles are what the user typed, so they only ever go in as text.
 
-import { icon, prChipFace, shipChip, span } from "./sidebar.js";
+import { icon } from "./icons.js";
+import { prChipFace, shipChip, span } from "./sidebar.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
 const MINUTE = 60;
@@ -81,4 +82,35 @@ export function renderPastSessions(container, sessions, now, resume) {
     return;
   }
   container.replaceChildren(...sessions.map((s) => renderPastSession(s, now, resume)));
+}
+
+// The dialog's list of them. Only a group has a project to look in for its other sessions.
+export class PastSessions {
+  constructor(requests, close) {
+    this.requests = requests;
+    this.close = close;
+    this.fixed = null;
+    this.field = document.getElementById("resume-field");
+    this.list = document.getElementById("resume-list");
+  }
+
+  open(fixed) {
+    this.fixed = fixed;
+    this.field.hidden = fixed === null;
+    if (!fixed) return;
+    this.render(null);
+    this.requests.listPast(fixed.path);
+  }
+
+  // The backend's list; it may come twice, the second time with what GitHub said.
+  set(message) {
+    if (message.requested === this.fixed?.path) this.render(message.sessions);
+  }
+
+  render(sessions) {
+    renderPastSessions(this.list, sessions, Date.now() / 1000, (session) => {
+      this.requests.resume({ path: this.fixed.path, session_id: session.session_id });
+      this.close();
+    });
+  }
 }

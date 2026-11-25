@@ -251,22 +251,22 @@ class TestTabFor:
         tree = add_worktree(repository, "a")
         tab = tab_for(PastSession("claude", "s", tree, 0.0, "Do it"), repository)
         assert (tab.project_path, tab.project, tab.cwd) == (str(repository), "repo", str(tree))
-        assert (tab.worktree, tab.worktree_name) == (True, "a")
+        assert tab.worktree is True
         assert (tab.agent, tab.session_id, tab.title) == ("claude", "s", "Do it")
 
     def test_a_main_checkout_session_is_no_worktree(self, repository):
         tab = tab_for(PastSession("claude", "s", repository, 0.0), repository)
-        assert (tab.worktree, tab.worktree_name, tab.cwd) == (False, None, str(repository))
+        assert (tab.worktree, tab.cwd) == (False, str(repository))
 
-    def test_a_worktree_outside_claudes_folder_has_no_claude_name(self, repository, tmp_path):
+    def test_a_worktree_outside_claudes_folder_resumes_there(self, repository, tmp_path):
         tree = tmp_path / "elsewhere"
         git(repository, "worktree", "add", str(tree), "-b", "other")
         tab = tab_for(PastSession("codex", "s", tree, 0.0), repository)
-        assert (tab.worktree, tab.worktree_name) == (True, None)
+        assert (tab.worktree, tab.cwd) == (True, str(tree))
 
     def test_a_plain_folder(self, tmp_path):
         tab = tab_for(PastSession("claude", "s", tmp_path, 0.0), tmp_path)
-        assert (tab.worktree, tab.worktree_name) == (False, None)
+        assert tab.worktree is False
 
 
 class Rig:

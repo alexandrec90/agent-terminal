@@ -17,9 +17,18 @@ from agent_terminal.attention import (
     is_user_input,
     parse_program_state,
     parse_title,
+    seen,
 )
 
 ST = "\x1b\\"
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [(FINISHED, NO_ATTENTION), (NEEDS_INPUT, NEEDS_INPUT), (NO_ATTENTION, NO_ATTENTION)],
+)
+def test_seen_clears_a_finished_turn_but_not_a_question(before, after):
+    assert seen(before) == after
 
 
 def osc(payload: str, end: str = ST) -> str:

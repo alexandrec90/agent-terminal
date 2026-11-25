@@ -17,6 +17,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from agent_terminal import close_guard
 from agent_terminal.desktop import Desktop
 from agent_terminal.host_client import HostSessions
 from agent_terminal.manager import TabManager
@@ -30,6 +31,8 @@ log = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).parent / "web"
 HOST = "127.0.0.1"
 SHUTDOWN_TIMEOUT_SECONDS = 15
+# Asked from the window's own thread as it closes, which hangs while this waits.
+BUSY_QUERY_TIMEOUT_SECONDS = 2
 # These wait on a native dialog, on git, or on GitHub, for seconds or for as long as the
 # user likes. Handled in turn, they would hold up every keystroke to every tab behind them.
 SLOW_MESSAGES = frozenset(
@@ -40,6 +43,8 @@ SLOW_MESSAGES = frozenset(
         "pr_merge",
         "pr_close",
         "inspect_folder",
+        "past_sessions",
+        "resume_session",
         "list_remote_repos",
         "clone_repo",
         "describe_deletion",
@@ -84,6 +89,8 @@ class Backend:
         self._relaunch = relaunch
         # Set by a restart that keeps the processes: `stop` then leaves them running.
         self._keep_sessions = False
+        # Set by any restart: the user asked for it, so closing then asks nothing.
+        self._restarting = False
         self._control = AppControl(
             settings,
             self._outbox.put_nowait,
@@ -114,6 +121,24 @@ class Backend:
         threading.Thread(target=self._loop.run_forever, name="backend", daemon=True).start()
         asyncio.run_coroutine_threadsafe(self._serve(), self._loop).result()
 
+    def busy_tabs(self) -> list[str] | None:
+        """From any thread: the tabs whose agent is mid-turn, or None if the event loop
+        did not answer in time. None are, for closing's purposes, once a restart was asked for:
+        its close runs on the loop, which could not answer either."""
+        if self._restarting:
+            return []
+
+        async def ask() -> list[str]:
+            return close_guard.busy_tabs(self._manager.runner.live.values())
+
+        future = asyncio.run_coroutine_threadsafe(ask(), self._loop)
+        try:
+            return future.result(timeout=BUSY_QUERY_TIMEOUT_SECONDS)
+        except TimeoutError:
+            future.cancel()
+            log.warning("busy-tab query timed out")
+            return None
+
     def stop(self) -> None:
         """Save the tabs and end every process, or, for a restart that keeps them, leave
         them running in the session host."""
@@ -131,6 +156,7 @@ class Backend:
             raise ValueError("this app cannot restart itself")
         self._keep_sessions = keep_sessions and self._manager.sessions.status()["kept"]
         self._relaunch(self._settings, self._checkout, update)
+        self._restarting = True
         self._close_window()
 
     async def _serve(self) -> None:

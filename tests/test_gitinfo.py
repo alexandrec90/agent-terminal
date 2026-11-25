@@ -6,6 +6,7 @@ from agent_terminal import gitinfo
 from agent_terminal.gitinfo import (
     GitError,
     commit_everything,
+    contains_commit,
     current_branch,
     git_dir,
     has_commits,
@@ -162,3 +163,23 @@ class TestCommitEverything:
         identify(tmp_path)
         commit_everything(tmp_path)
         assert run_git(tmp_path, "ls-files") == ""
+
+
+class TestContainsCommit:
+    def test_true_for_a_commit_in_heads_history(self, repository):
+        head = run_git(repository, "rev-parse", "HEAD").strip()
+        assert contains_commit(repository, head) is True
+
+    def test_false_for_a_commit_not_fetched(self, repository):
+        assert contains_commit(repository, "0123456789abcdef" * 2 + "01234567") is False
+
+    def test_false_for_a_commit_on_another_branch(self, repository):
+        git(repository, "switch", "--create", "side")
+        git(repository, "commit", "--allow-empty", "--message", "side")
+        side = run_git(repository, "rev-parse", "HEAD").strip()
+        git(repository, "switch", "main")
+        assert contains_commit(repository, side) is False
+
+    @pytest.mark.parametrize("given", ["", "HEAD", "--all", "-x", "ABCDEF0", "abc"])
+    def test_anything_but_a_hash_is_refused_before_git_sees_it(self, repository, given):
+        assert contains_commit(repository, given) is False

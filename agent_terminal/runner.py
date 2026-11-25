@@ -296,7 +296,12 @@ class TabRunner:
         title = attention.parse_title(payload)
         if title is not None:
             tab.title = attention.clean_title(title, tab.project) or tab.title
-        return before != (live.status, tab.attention, tab.parked, tab.title, live.awaiting_trust)
+        changed = before != (live.status, tab.attention, tab.parked, tab.title, live.awaiting_trust)
+        # Only once the user has typed here: a restored session settling, or Codex saying
+        # `working` on every start, is the app's doing and not news.
+        if changed and live.user_engaged:
+            tab.updated_at = time.time()
+        return changed
 
     def _past_trust(self, live: LiveTab, state: str) -> None:
         """The agent's first state answers its trust screen: `clear` if it was declined,

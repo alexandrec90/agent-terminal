@@ -245,6 +245,45 @@ def test_a_status_change_is_announced_once(tmp_path):
     run(tmp_path, body)
 
 
+def test_a_change_the_user_set_going_stamps_the_tab(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent_terminal.runner.time.time", lambda: 1234.0)
+
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        rig.runner.input("t", "fix it\r")
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at == 1234.0
+
+    run(tmp_path, body)
+
+
+def test_a_change_before_the_user_types_leaves_the_stamp(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        # A restored session settling, or Codex's `working` on every start.
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        rig.runner.receive(live, "\x1b]7501;state=idle:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at is None
+
+    run(tmp_path, body)
+
+
+def test_a_repeated_state_leaves_the_stamp(tmp_path, monkeypatch):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        rig.runner.input("t", "x")
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        monkeypatch.setattr("agent_terminal.runner.time.time", lambda: 9999.0)
+        rig.runner.receive(live, "\x1b]7501;state=working:app=x\x1b\\")
+        await asyncio.sleep(0.01)
+        assert live.tab.updated_at != 9999.0
+
+    run(tmp_path, body)
+
+
 def test_output_from_a_closed_tab_changes_nothing(tmp_path):
     async def body(rig: Rig) -> None:
         live = rig.runner.add(make_tab(tmp_path))

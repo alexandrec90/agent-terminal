@@ -9,10 +9,12 @@ from typing import Any
 
 import pytest
 
+from agent_terminal import close_guard
 from agent_terminal import manager as module
 from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION
 from agent_terminal.desktop import Desktop, is_web_url
-from agent_terminal.manager import TabManager
+from agent_terminal.manager import TabManager, switch_view
+from agent_terminal.prompts import claude_transcript_dir
 from agent_terminal.pty_session import SpawnError
 from agent_terminal.sessions import LocalSessions, Survivor
 from agent_terminal.settings import Settings
@@ -346,6 +348,57 @@ async def test_a_finished_turn_is_flagged_apart_from_a_question(rig):
     assert rig.tabs()[0]["attention"] == FINISHED
 
 
+def test_switch_view_marks_both_ends_seen():
+    def tab(tab_id: str, flag: str) -> Tab:
+        return Tab(
+            id=tab_id,
+            project="p",
+            project_path="/p",
+            agent="claude",
+            created_at=0.0,
+            attention=flag,
+        )
+
+    tabs = [tab("a", FINISHED), tab("b", FINISHED), tab("c", FINISHED), tab("d", NEEDS_INPUT)]
+    assert switch_view(tabs, "a", "b") == "b"
+    assert [t.attention for t in tabs] == [NO_ATTENTION, NO_ATTENTION, FINISHED, NEEDS_INPUT]
+    assert switch_view(tabs, "b", "d") == "d"
+    assert tabs[3].attention == NEEDS_INPUT
+    assert switch_view(tabs, None, None) is None
+
+
+@run
+async def test_viewing_a_finished_tab_clears_its_flag(rig):
+    await rig.hello()
+    first = await rig.create()
+    await rig.create()
+    await rig.output(first["id"], status("working") + status("done"))
+    assert rig.tabs()[0]["attention"] == FINISHED
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[0]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_a_tab_that_finished_while_watched_is_read_once_left(rig):
+    await rig.hello()
+    first = await rig.create()
+    second = await rig.create()
+    await rig.output(second["id"], status("working") + status("done"))
+    assert rig.tabs()[1]["attention"] == FINISHED, "still flagged while it is on screen"
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[1]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_viewing_a_question_leaves_it_flagged(rig):
+    await rig.hello()
+    first = await rig.create()
+    await rig.create()
+    await rig.output(first["id"], status("working") + status("blocked"))
+    await rig.manager.handle({"type": "activate", "id": first["id"]})
+    assert rig.tabs()[0]["attention"] == NEEDS_INPUT
+
+
 @run
 async def test_answering_clears_attention(rig):
     await rig.hello()
@@ -354,6 +407,26 @@ async def test_answering_clears_attention(rig):
     await rig.manager.handle({"type": "input", "id": tab["id"], "data": "1"})
     await rig.output(tab["id"], status("working"))
     assert rig.tabs()[0]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_busy_tabs_are_those_mid_turn(rig):
+    await rig.hello()
+    working = await rig.create()
+    blocked = await rig.create(rig.plain)
+    idle = await rig.create()
+    await rig.output(working["id"], status("working") + f"\x1b]0;Fixing the build{ST}")
+    await rig.output(blocked["id"], status("working") + status("blocked"))
+    await rig.output(idle["id"], status("working") + status("idle"))
+    busy = close_guard.busy_tabs(rig.manager.runner.live.values())
+    assert busy == ["repo: Fixing the build", "plain"]
+
+
+@run
+async def test_no_tab_is_busy_before_its_agent_says_so(rig):
+    await rig.hello()
+    await rig.create()
+    assert close_guard.busy_tabs(rig.manager.runner.live.values()) == []
 
 
 @run
@@ -415,10 +488,13 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "close", "id": tab["id"]})
+    # The group's place is kept, for the next tab opened in that folder.
+    repo = str(rig.repo.resolve())
     assert rig.state() == {
         "type": "state",
         "active_id": None,
         "tabs": [],
+        "group_order": [repo],
         "prs": [],
         "folded": [],
         "hidden": [],
@@ -623,6 +699,40 @@ def test_is_web_url(url, allowed):
 def make_saved_tab(project_path: str, **fields) -> Tab:
     defaults = {"id": "saved", "project": "repo", "agent": "claude", "created_at": 1.0}
     return Tab(project_path=project_path, **{**defaults, **fields})
+
+
+def write_session(rig: Rig, folder: Path, session_id: str) -> None:
+    directory = claude_transcript_dir(rig.settings.claude_home, folder)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{session_id}.jsonl").write_text("{}\n")
+
+
+@run
+async def test_a_groups_unopened_sessions_leave_out_its_tabs(rig):
+    await rig.hello()
+    tab = await rig.create(rig.plain)
+    write_session(rig, rig.plain, tab["session_id"])
+    write_session(rig, rig.plain, "earlier")
+    await rig.manager.handle({"type": "past_sessions", "path": str(rig.plain)})
+    sent = next(m for m in reversed(rig.messages) if m["type"] == "past_sessions")
+    assert [s["session_id"] for s in sent["sessions"]] == ["earlier"]
+
+
+@run
+async def test_resuming_a_past_session_opens_it_once(rig):
+    await rig.hello()
+    write_session(rig, rig.plain, "earlier")
+    message = {"type": "resume_session", "path": str(rig.plain), "session_id": "earlier"}
+    await rig.manager.handle(message)
+    assert [t["session_id"] for t in rig.tabs()] == ["earlier"]
+    assert rig.tabs()[0]["project_path"] == str(rig.plain)
+    assert rig.processes[0].command().startswith("& 'claude' '--resume' 'earlier'")
+
+    # Clicked again from a list drawn before it opened: its tab is shown, not doubled.
+    await rig.create(rig.plain)
+    await rig.manager.handle(message)
+    assert len(rig.tabs()) == 2
+    assert rig.state()["active_id"] == rig.tabs()[0]["id"]
 
 
 @run
@@ -849,6 +959,141 @@ def test_more_handlers_answer_more_types(tmp_path):
 
     asyncio.run(body())
     assert seen == [{"type": "app_status"}]
+
+
+def ids(rig: Rig) -> list[str]:
+    return [t["id"] for t in rig.tabs()]
+
+
+async def two_groups(rig: Rig) -> tuple[list[str], list[str]]:
+    """Tabs a1, b1, a2, a3 in that order: `repo` is a, `plain` is b."""
+    a1 = (await rig.create())["id"]
+    b1 = (await rig.create(rig.plain))["id"]
+    a2 = (await rig.create())["id"]
+    a3 = (await rig.create())["id"]
+    return [a1, a2, a3], [b1]
+
+
+@run
+async def test_a_tab_moves_before_another_of_its_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a3, "before": a1})
+    assert ids(rig) == [a3, a1, b1, a2]
+
+
+@run
+async def test_a_tab_moved_before_nothing_goes_last_in_its_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a1, "before": None})
+    assert ids(rig) == [b1, a2, a3, a1]
+    # Group order is its own record, so tabs moving about never reorders the groups.
+    assert rig.state()["group_order"] == [str(rig.repo.resolve()), str(rig.plain.resolve())]
+
+
+@run
+async def test_a_tab_cannot_move_into_another_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a1, "before": b1})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@run
+async def test_a_tab_moved_before_itself_stays(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a2, "before": a2})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@run
+async def test_the_only_tab_of_a_group_moved_last_stays_put(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": b1, "before": None})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "move_tab", "id": "absent", "before": None},
+        {"type": "move_tab", "id": "FIRST", "before": "absent"},
+        {"type": "move_tab"},
+        {"type": "order_groups"},
+        {"type": "order_groups", "paths": "C:\\a"},
+        {"type": "order_groups", "paths": [1, 2]},
+    ],
+)
+def test_a_bad_reorder_is_dropped_and_changes_nothing(tmp_path, message):
+    async def body():
+        rig = Rig(tmp_path, asyncio.get_running_loop())
+        try:
+            await rig.hello()
+            first = await rig.create()
+            await rig.create(rig.plain)
+            before = rig.state()
+            filled = {k: first["id"] if v == "FIRST" else v for k, v in message.items()}
+            await rig.manager.handle(filled)
+            assert rig.state() == before
+        finally:
+            for process in rig.processes:
+                process.end(0)
+
+    asyncio.run(body())
+
+
+@run
+async def test_groups_take_the_order_the_page_gives(rig):
+    await rig.hello()
+    await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    assert rig.state()["group_order"] == [repo, plain]
+    await rig.manager.handle({"type": "order_groups", "paths": [plain, repo, plain]})
+    assert rig.state()["group_order"] == [plain, repo]
+
+
+@run
+async def test_a_group_the_page_did_not_name_keeps_its_place_after(rig):
+    await rig.hello()
+    await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    await rig.manager.handle({"type": "order_groups", "paths": ["C:\\pr-only", plain]})
+    assert rig.state()["group_order"] == ["C:\\pr-only", plain, repo]
+
+
+@run
+async def test_tab_and_group_order_survive_a_restart(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    await rig.manager.handle({"type": "move_tab", "id": a3, "before": a1})
+    await rig.manager.handle({"type": "order_groups", "paths": [plain, repo]})
+    await rig.manager.shutdown()
+    saved = load_snapshot(rig.settings.state_file)
+    assert [t.id for t in saved.tabs] == [a3, a1, b1, a2]
+    assert saved.group_order == [plain, repo]
+
+
+@run
+async def test_a_restore_from_before_group_order_orders_groups_as_they_appear(rig):
+    b, a = str(rig.plain), str(rig.repo)
+    tabs = [make_saved_tab(b, id="b"), make_saved_tab(a, id="a"), make_saved_tab(b, id="c")]
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=tabs))
+    await rig.hello()
+    assert rig.state()["group_order"] == [b, a]
+
+
+@run
+async def test_a_tab_says_when_it_was_last_updated(rig):
+    await rig.hello()
+    tab = await rig.create()
+    assert tab["updated_at"] is None
+    await rig.manager.handle({"type": "input", "id": tab["id"], "data": "go\r"})
+    await rig.output(tab["id"], status("working"))
+    assert rig.tabs()[0]["updated_at"] >= tab["created_at"]
 
 
 def write_rollout(settings: Settings, session_id: str, cwd: str, started: str) -> None:

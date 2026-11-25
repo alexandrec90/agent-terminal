@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import aiohttp
 import pytest
 
+from agent_terminal import server as server_module
 from agent_terminal.server import HOST, Backend, request_allowed
 from agent_terminal.settings import Settings
 from agent_terminal.updates import UpdateStatus
@@ -128,6 +129,43 @@ def test_a_slow_request_does_not_hold_up_the_messages_behind_it(backend):
     asyncio.run(body())
 
 
+def test_busy_tabs_are_asked_of_the_loop_from_another_thread(backend, monkeypatch):
+    seen = []
+
+    def busy(live):
+        seen.append(threading.current_thread().name)
+        return ["demo: fixing"]
+
+    monkeypatch.setattr(server_module.close_guard, "busy_tabs", busy)
+    assert backend.busy_tabs() == ["demo: fixing"]
+    assert seen == ["backend"]
+
+
+def test_a_restart_the_user_asked_for_is_not_asked_about_again(tmp_path, monkeypatch):
+    """Its close runs on the loop, so asking there would only time out, and the dialog
+    would say agents end when a restart keeps them."""
+    monkeypatch.setattr(server_module.close_guard, "busy_tabs", lambda _live: ["demo: fixing"])
+    asked: list[list[str] | None] = []
+    backend = Backend(
+        Settings(data_dir=tmp_path, session_host=False),
+        close_window=lambda: asked.append(backend.busy_tabs()),
+        checkout=tmp_path,
+        relaunch=Restarts().relaunch,
+    )
+    backend.request_restart(update=False, keep_sessions=True)
+    assert asked == [[]]
+
+
+def test_busy_tabs_is_none_when_the_loop_does_not_answer(backend, monkeypatch):
+    monkeypatch.setattr(server_module, "BUSY_QUERY_TIMEOUT_SECONDS", 0.05)
+    released = threading.Event()
+    backend._loop.call_soon_threadsafe(released.wait, 5)
+    try:
+        assert backend.busy_tabs() is None
+    finally:
+        released.set()
+
+
 def test_keystrokes_stay_in_order(backend):
     seen: list[str] = []
 
@@ -231,6 +269,7 @@ def test_a_page_says_hello_and_hears_the_projects(backend):
             "type": "state",
             "active_id": None,
             "tabs": [],
+            "group_order": [],
             "prs": [],
             "folded": [],
             "hidden": [],

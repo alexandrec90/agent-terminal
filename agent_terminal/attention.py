@@ -148,6 +148,12 @@ class Presence:
     parked: bool = False
 
 
+def seen(attention: str) -> str:
+    """What the user looking at a tab leaves of its flag: a finished turn has been read,
+    but a question is still waiting for its answer."""
+    return NO_ATTENTION if attention == FINISHED else attention
+
+
 def advance(presence: Presence, state: str, *, user_engaged: bool = True) -> Presence:
     """Apply one reported state. Only the agent stopping anew brings a parked tab back:
     the second `done` a turn sends, or a restored session settling, must not.

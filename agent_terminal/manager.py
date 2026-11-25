@@ -9,9 +9,11 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from agent_terminal import agents, folders, gitinfo
+from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit, Handler
 from agent_terminal.groups import Groups, open_folders, successor
+from agent_terminal.history import HistoryLinks, SessionHistory
+from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
 from agent_terminal.project_requests import ProjectRequests
@@ -26,6 +28,16 @@ log = logging.getLogger(__name__)
 # Resuming every agent at once slows the machine to a crawl; a gap keeps it responsive.
 RESTORE_GAP_SECONDS = 0.3
 DEFAULT_SIZE = (32, 120)
+
+
+def switch_view(tabs: list[Tab], leaving: str | None, arriving: str | None) -> str | None:
+    """Move the user's eye from one tab to another, returning the new active id. Both
+    count as read: the one arrived at, and the one left, whose turn may have finished
+    while the user sat on it."""
+    for tab in tabs:
+        if tab.id in (leaving, arriving):
+            tab.attention = attention.seen(tab.attention)
+    return arriving
 
 
 class TabManager:
@@ -48,6 +60,7 @@ class TabManager:
         self._desktop = desktop or Desktop()
         self._tabs: list[Tab] = []
         self._active_id: str | None = None
+        self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._groups = Groups(self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
@@ -67,9 +80,12 @@ class TabManager:
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
-        self._pr_requests = PrRequests(self.board, gh, loop, emit)
+        self._pr_requests = PrRequests(self.board, gh, loop, emit, self._open_or_show)
         self._projects = ProjectRequests(
             settings, emit, loop, self._desktop, gh, lambda: open_folders(self._tabs)
+        )
+        history = SessionHistory(
+            settings, self.board, loop, emit, HistoryLinks(lambda: self._tabs, self._open_or_show)
         )
         self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {
             "hello": self._on_hello,
@@ -85,9 +101,10 @@ class TabManager:
             "input": self._on_input,
             "resize": self._on_resize,
             "paste": self._on_paste,
-            "pr_resume": self._on_pr_resume,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **history.handlers(),
+            **self._ordering.handlers(),
             **self._projects.handlers(),
             **(handlers or {}),
         }
@@ -140,19 +157,19 @@ class TabManager:
 
     async def _open(self, tab: Tab) -> None:
         self._tabs.append(tab)
-        self._active_id = tab.id
+        self._ordering.place(tab.project_path)
+        self._active_id = switch_view(self._tabs, self._active_id, tab.id)
         self._groups.opened(tab.project_path)
         self.runner.add(tab)
         self._on_changed()
         await self.runner.start(tab, self._size)
         await self.board.scan()
 
-    async def _on_pr_resume(self, message: dict[str, Any]) -> None:
-        """Bring a PR's session back as a tab, or go to the tab that already has it."""
-        tab = self._pr_requests.tab_for_prompt(message)
+    async def _open_or_show(self, tab: Tab) -> None:
+        """Open a tab resuming a session, or go to the tab that already has it."""
         existing = next((t for t in self._tabs if t.session_id == tab.session_id), None)
         if existing is not None:
-            self._active_id = existing.id
+            self._active_id = switch_view(self._tabs, self._active_id, existing.id)
             self._on_changed()
             return
         await self._open(tab)
@@ -160,15 +177,18 @@ class TabManager:
     async def _close_tabs(self, leaving: list[Tab]) -> None:
         """Close one tab, or a group's at once. The active tab, if leaving, hands over to
         the nearest tab left, the next one first."""
-        self._active_id = successor(self._tabs, self._active_id, leaving)
+        heir = successor(self._tabs, self._active_id, leaving)
         gone = {tab.id for tab in leaving}
         self._tabs = [tab for tab in self._tabs if tab.id not in gone]
+        if heir != self._active_id:
+            self._active_id = switch_view(self._tabs, None, heir)
         stopping = [self._loop.create_task(self.runner.close(tab_id)) for tab_id in gone]
         self._on_changed()
         await asyncio.gather(*stopping)
 
     async def _on_activate(self, message: dict[str, Any]) -> None:
-        self._active_id = self._tab(message["id"]).id
+        arriving = self._tab(message["id"]).id
+        self._active_id = switch_view(self._tabs, self._active_id, arriving)
         self._on_changed()
 
     async def _on_toggle_park(self, message: dict[str, Any]) -> None:
@@ -224,6 +244,7 @@ class TabManager:
                 "type": "state",
                 "active_id": self._active_id,
                 "tabs": tabs,
+                "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
                 **self._groups.fields(),
             }
@@ -234,6 +255,7 @@ class TabManager:
         return Snapshot(
             tabs=self._tabs,
             active_id=self._active_id,
+            group_order=self._ordering.group_order,
             folded=groups["folded"],
             hidden=groups["hidden"],
         )
@@ -243,6 +265,7 @@ class TabManager:
         and a resumed agent if not."""
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
+        self._ordering.restore(snapshot.group_order)
         self._groups.restore(snapshot.folded, snapshot.hidden)
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None

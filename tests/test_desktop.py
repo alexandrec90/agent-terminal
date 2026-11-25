@@ -15,6 +15,7 @@ from agent_terminal.__main__ import (
     close_window,
     run_window,
 )
+from agent_terminal.close_guard import DIALOG_TITLE
 from agent_terminal.desktop import Desktop, DesktopRequests, no_picker
 from agent_terminal.settings import Settings
 from agent_terminal.taskbar import brand_window
@@ -146,6 +147,30 @@ class TestCloseWindow:
         assert closed == [True]
 
 
+class RecordedClosing:
+    def __init__(self) -> None:
+        self.handlers: list[Any] = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+
+class RecordedWindow:
+    def __init__(self) -> None:
+        self.events = type("Events", (), {})()
+        self.events.closing = RecordedClosing()
+        self.asked: list[str] = []
+
+    def create_confirmation_dialog(self, title, _message):
+        self.asked.append(title)
+        return False
+
+
+def no_busy_tabs() -> list[str]:
+    return []
+
+
 class RecordingWebview:
     """Stands in for `webview`, keeping what the window was opened with."""
 
@@ -155,7 +180,8 @@ class RecordingWebview:
 
     def create_window(self, title, url, **options):
         self.created = {"title": title, "url": url, **options}
-        return "the window"
+        self.window = RecordedWindow()
+        return self.window
 
     def start(self, **options):
         self.started = options
@@ -170,20 +196,26 @@ class TestRunWindow:
 
     def test_opens_the_page_and_hands_the_window_to_the_picker(self, webview):
         picker = FolderPicker()
-        run_window("http://127.0.0.1:1/", picker)
+        run_window("http://127.0.0.1:1/", picker, no_busy_tabs)
         assert webview.created["url"] == "http://127.0.0.1:1/"
         assert webview.created["background_color"] == BACKGROUND
-        assert picker.window == "the window"
+        assert picker.window is webview.window
 
     def test_the_window_wears_the_app_icon(self, webview):
-        run_window("http://127.0.0.1:1/", FolderPicker())
+        run_window("http://127.0.0.1:1/", FolderPicker(), no_busy_tabs)
         assert webview.started["icon"] == str(APP_ICON)
+
+    def test_closing_on_a_busy_agent_asks_and_can_be_cancelled(self, webview):
+        run_window("http://127.0.0.1:1/", FolderPicker(), lambda: ["repo: Fix the bug"])
+        [on_closing] = webview.window.events.closing.handlers
+        assert on_closing() is False
+        assert webview.window.asked == [DIALOG_TITLE]
 
     def test_the_window_is_given_its_taskbar_identity_once_running(self, webview):
         picker = FolderPicker()
-        run_window("http://127.0.0.1:1/", picker)
+        run_window("http://127.0.0.1:1/", picker, no_busy_tabs)
         assert webview.started["func"] is brand_window
-        assert webview.started["args"] == ("the window", APP_ICON)
+        assert webview.started["args"] == (webview.window, APP_ICON)
 
     def test_the_app_icon_is_where_the_window_looks(self):
         """pywebview skips an icon path that is not a file, silently."""
@@ -201,7 +233,7 @@ class TestRunWindow:
             return create(*args, **options)
 
         monkeypatch.setattr(webview, "create_window", create_window)
-        run_window("http://127.0.0.1:1/", FolderPicker())
+        run_window("http://127.0.0.1:1/", FolderPicker(), no_busy_tabs)
         assert order == ["app id", "window"]
 
 

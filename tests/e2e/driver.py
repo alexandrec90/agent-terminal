@@ -88,6 +88,25 @@ class Window:
             "new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))"
         )
 
+    async def drag(self, source: str, target: str, *, below: bool = False) -> None:
+        """Drag `source` onto the top or bottom quarter of `target`, through the events
+        the browser sends for a real drag."""
+        await self.js(
+            "(() => {"
+            f" const source = document.querySelector({json.dumps(source)});"
+            f" const target = document.querySelector({json.dumps(target)});"
+            " const box = target.getBoundingClientRect();"
+            f" const y = box.top + box.height * ({'0.75' if below else '0.25'});"
+            " const dataTransfer = new DataTransfer();"
+            " const send = (element, type) => element.dispatchEvent(new DragEvent(type,"
+            "  {bubbles: true, cancelable: true, clientX: box.left + 4, clientY: y, dataTransfer}));"
+            " send(source, 'dragstart');"
+            " send(target, 'dragover');"
+            " send(target, 'drop');"
+            " send(source, 'dragend');"
+            "})()"
+        )
+
     async def screenshot(self, path: Path) -> None:
         shot = await self._call("Page.captureScreenshot", format="png")
         await asyncio.to_thread(path.write_bytes, base64.b64decode(shot["data"]))

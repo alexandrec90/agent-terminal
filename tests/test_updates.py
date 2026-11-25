@@ -1,4 +1,5 @@
 import asyncio
+import importlib.metadata
 import json
 import subprocess
 from pathlib import Path
@@ -11,10 +12,13 @@ from agent_terminal.updates import (
     AppControl,
     UpdateStatus,
     app_checkout,
+    cannot_update,
     check_for_update,
     git,
     git_env,
+    installed_from,
     read_update_result,
+    source_checkout,
 )
 
 
@@ -214,15 +218,100 @@ def test_without_a_checkout_there_is_nothing_to_update(tmp_path):
             asyncio.get_running_loop(),
             dict,
             lambda *_: None,
+            source=lambda: tmp_path,
         )
         control.start()
         await control.check_now()
         control.emit_status()
         assert messages[-1]["update"] is None
+        assert "not running from a git checkout" in messages[-1]["cannot_update"]
+        assert str(tmp_path) in messages[-1]["cannot_update"]
         with pytest.raises(ValueError, match="not running from a checkout"):
             await control.handlers()["app_restart"]({"update": True})
 
     asyncio.run(go())
+
+
+@run
+async def test_a_checkout_has_nothing_to_say_about_its_install(rig):
+    rig.control.emit_status()
+    assert rig.last()["cannot_update"] == ""
+
+
+def test_a_checkout_never_looks_for_its_install(tmp_path):
+    def source() -> Path | None:
+        raise AssertionError("a checkout needs no install source")
+
+    async def go() -> None:
+        AppControl(
+            Settings(data_dir=tmp_path),
+            lambda _message: None,
+            asyncio.get_running_loop(),
+            dict,
+            lambda *_: None,
+            checkout=tmp_path,
+            source=source,
+        )
+
+    asyncio.run(go())
+
+
+def direct_url(url: str) -> str:
+    return json.dumps({"url": url, "dir_info": {}})
+
+
+def test_the_source_checkout_is_read_from_direct_url(tmp_path):
+    (tmp_path / ".git").mkdir()
+    assert source_checkout(direct_url(tmp_path.as_uri())) == tmp_path
+
+
+def test_a_source_that_is_not_a_checkout_is_none(tmp_path):
+    """`uv tool install` from a temporary copy, as the window this was found in was."""
+    assert source_checkout(direct_url(tmp_path.as_uri())) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        None,
+        "",
+        "not json",
+        "[]",
+        json.dumps({"dir_info": {}}),
+        direct_url("https://example.invalid/agent-terminal.tar.gz"),
+    ],
+)
+def test_an_unusable_direct_url_is_none(text):
+    assert source_checkout(text) is None
+
+
+def test_installed_from_reads_this_distribution(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+
+    class Dist:
+        def read_text(self, name: str) -> str | None:
+            assert name == "direct_url.json"
+            return direct_url(tmp_path.as_uri())
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda _name: Dist())
+    assert installed_from() == tmp_path
+
+
+def test_installed_from_without_a_distribution_is_none(monkeypatch):
+    def missing(name: str) -> None:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", missing)
+    assert installed_from() is None
+
+
+def test_cannot_update_names_the_checkout_to_run(tmp_path):
+    said = cannot_update(tmp_path)
+    assert str(tmp_path / ".venv" / "Scripts" / "agent-terminal.exe") in said
+
+
+def test_cannot_update_without_a_source_still_says_what_to_do():
+    assert "Run it from a checkout's .venv" in cannot_update(None)
 
 
 def test_the_last_update_is_shown_once(tmp_path):

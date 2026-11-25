@@ -16,6 +16,8 @@ let groupOrder = [];
 let activeId = null;
 let folded = new Set();
 let hidden = new Set();
+// Groups that stay with no tab in them, `{path, name}` each.
+let kept = [];
 let synced = false;
 let appStatus = null;
 // Mid-drag, a redraw would take the dragged row away: hold it until the drop.
@@ -120,7 +122,13 @@ function linkedTab() {
 function render() {
   renderHeld = dragging;
   if (dragging) return;
-  const view = { activeId: review.pr ? null : activeId, reviewing: review.pr, folded, hidden };
+  const view = {
+    activeId: review.pr ? null : activeId,
+    reviewing: review.pr,
+    folded,
+    hidden,
+    kept,
+  };
   renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
   empty.hidden = tabs.length > 0 || review.pr !== null;
@@ -139,6 +147,7 @@ function applyState(state) {
   groupOrder = state.group_order ?? [];
   folded = new Set(state.folded);
   hidden = new Set(state.hidden);
+  kept = state.kept ?? [];
   if (state.active_id !== activeId) review.close();
   activeId = state.active_id;
   synced = true;

@@ -488,7 +488,7 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "close", "id": tab["id"]})
-    # The group's place is kept, for the next tab opened in that folder.
+    # The group stays, and its place, for the next tab opened in that folder.
     repo = str(rig.repo.resolve())
     assert rig.state() == {
         "type": "state",
@@ -496,9 +496,39 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
         "tabs": [],
         "group_order": [repo],
         "prs": [],
+        "kept": [{"path": repo, "name": rig.repo.resolve().name}],
         "folded": [],
         "hidden": [],
     }
+
+
+@run
+async def test_a_group_emptied_tab_by_tab_stays_until_its_own_close(rig):
+    await rig.hello()
+    first = await rig.create()
+    second = await rig.create()
+    repo = first["project_path"]
+    await rig.manager.handle({"type": "close", "id": first["id"]})
+    await rig.manager.handle({"type": "close", "id": second["id"]})
+    assert [group["path"] for group in rig.state()["kept"]] == [repo]
+    assert rig.state()["hidden"] == []
+    await rig.manager.handle({"type": "close_group", "path": repo})
+    assert rig.state()["kept"] == []
+    assert rig.state()["hidden"] == [repo]
+
+
+@run
+async def test_an_empty_kept_group_survives_a_restart(rig):
+    await rig.hello()
+    tab = await rig.create()
+    await rig.manager.handle({"type": "close", "id": tab["id"]})
+    await rig.manager.shutdown()
+    assert load_snapshot(rig.settings.state_file).kept == [tab["project_path"]]
+
+    sessions = LocalSessions(rig.spawn, rig.killed.append)
+    again = TabManager(rig.settings, rig.messages.append, rig.loop, sessions)
+    await again.handle({"type": "hello", "rows": 30, "cols": 100})
+    assert [group["path"] for group in rig.state()["kept"]] == [tab["project_path"]]
 
 
 @run

@@ -80,9 +80,9 @@ def test_a_non_string_active_id_is_dropped():
     assert parse_snapshot(text).active_id is None
 
 
-def test_folded_and_hidden_groups_round_trip(tmp_path):
+def test_kept_folded_and_hidden_groups_round_trip(tmp_path):
     path = tmp_path / "state.json"
-    snapshot = Snapshot(folded=["C:\\a"], hidden=["C:\\b", "C:\\c"])
+    snapshot = Snapshot(folded=["C:\\a"], hidden=["C:\\b", "C:\\c"], kept=["C:\\a", "C:\\d"])
     save_snapshot(path, snapshot)
     assert load_snapshot(path) == snapshot
 
@@ -90,7 +90,23 @@ def test_folded_and_hidden_groups_round_trip(tmp_path):
 def test_a_file_from_before_groups_were_kept_has_none():
     text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "active_id": None})
     snapshot = parse_snapshot(text)
-    assert (snapshot.folded, snapshot.hidden) == ([], [])
+    assert (snapshot.folded, snapshot.hidden, snapshot.kept) == ([], [], None)
+
+
+def test_a_saved_empty_kept_list_is_not_a_file_from_before():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "kept": []})
+    assert parse_snapshot(text).kept == []
+
+
+def test_a_snapshot_with_no_kept_list_round_trips_as_none(tmp_path):
+    path = tmp_path / "state.json"
+    save_snapshot(path, Snapshot())
+    assert load_snapshot(path).kept is None
+
+
+def test_odd_kept_entries_are_dropped():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": [], "kept": [1, "C:\\a"]})
+    assert parse_snapshot(text).kept == ["C:\\a"]
 
 
 def test_odd_group_lists_cost_the_groups_not_the_tabs():

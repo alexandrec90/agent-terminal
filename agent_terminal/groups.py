@@ -1,7 +1,9 @@
-"""The sidebar's groups as the user arranged them: folded to a heading, or closed.
+"""The sidebar's groups as the user arranged them: kept, folded to a heading, or closed.
 
-A group is a folder path. Closing one closes its tabs and hides it, so its PRs go with
-them; it comes back when a session opens there. Both survive a restart in `state.json`.
+A group is a folder path. Opening a session there keeps it, and it stays when its last
+tab closes: only its own close removes it. That closes its tabs and hides it, so its PRs
+go with them; it comes back when a session opens there. All of it survives a restart in
+`state.json`.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from agent_terminal import folders
 from agent_terminal.store import Tab
 
 Handler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -48,20 +51,40 @@ def open_folders(tabs: Iterable[Tab]) -> list[Path]:
 
 
 class Groups:
-    """Which groups are folded and which hidden. `changed` saves and tells the page."""
+    """Which groups are kept, folded and hidden. `changed` saves and tells the page."""
 
     def __init__(self, changed: Callable[[], None]) -> None:
         self._changed = changed
+        self.kept: set[str] = set()
         self.folded: set[str] = set()
         self.hidden: set[str] = set()
 
-    def restore(self, folded: Iterable[str], hidden: Iterable[str]) -> None:
+    def restore(
+        self,
+        folded: Iterable[str],
+        hidden: Iterable[str],
+        kept: Iterable[str] | None = None,
+        tabs: Iterable[Tab] = (),
+    ) -> None:
+        """`kept` None is a file from before groups were kept: every group with a tab
+        was, then, and no other."""
         self.folded = set(folded)
         self.hidden = set(hidden)
+        self.kept = set(kept) if kept is not None else {tab.project_path for tab in tabs}
 
     def fields(self) -> dict[str, list[str]]:
-        """For the state message and the session file alike."""
-        return {"folded": sorted(self.folded), "hidden": sorted(self.hidden)}
+        """For the session file: the groups by path."""
+        return {
+            "kept": sorted(self.kept),
+            "folded": sorted(self.folded),
+            "hidden": sorted(self.hidden),
+        }
+
+    def state_fields(self) -> dict[str, Any]:
+        """For the state message: a kept group may have no tab to name it, so each
+        carries its name."""
+        kept = [{"path": path, "name": folders.display_name(Path(path))} for path in sorted(self.kept)]
+        return {**self.fields(), "kept": kept}
 
     async def on_fold(self, message: dict[str, Any]) -> None:
         path = group_path(message)
@@ -75,9 +98,11 @@ class Groups:
         """Hide the group a close names, and give back its tabs for closing."""
         path = group_path(message)
         self.hidden.add(path)
+        self.kept.discard(path)
         return [tab for tab in tabs if tab.project_path == path]
 
     def opened(self, path: str) -> None:
         """A session opened in a group: asking for one there is asking to see it."""
+        self.kept.add(path)
         self.hidden.discard(path)
         self.folded.discard(path)

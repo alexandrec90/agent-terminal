@@ -1,4 +1,5 @@
-// The tab groups: one per folder with a session or an open PR, in the order the user
+// The tab groups: one per folder with a session or an open PR, or kept from one until
+// its own close removes it, in the order the user
 // dragged them into, then the order they first appeared. PR text was written by whoever
 // opened it, so it only ever goes in as text.
 
@@ -27,13 +28,18 @@ function group(groups, path, name) {
   return groups.get(path);
 }
 
-export function groupItems(tabs, prs, order = []) {
+// `kept` is the groups that stay with no tab in them, `{path, name}` each: only a
+// group's own close removes one.
+export function groupItems(tabs, prs, order = [], kept = []) {
   const groups = new Map();
   for (const tab of tabs) {
     group(groups, tab.project_path, tab.project).tabs.push(tab);
   }
   for (const pr of prs) {
     group(groups, pr.repo, pr.project).prs.push(pr);
+  }
+  for (const entry of kept) {
+    group(groups, entry.path, entry.name);
   }
   const rank = (entry) => {
     const index = order.indexOf(entry.path);
@@ -393,7 +399,9 @@ function renderHead(entry, folded, actions) {
   fold.append(icon("chevron"));
   head.append(fold, span("group-name", entry.name));
   if (folded) head.append(foldedSummary(entry));
-  const closeLabel = entry.tabs.length ? `Close every session in ${entry.name}` : `Hide ${entry.name}`;
+  const closeLabel = entry.tabs.length
+    ? `Close every session in ${entry.name}`
+    : `Remove ${entry.name}`;
   head.append(
     headButton("group-add", "add", `New session in ${entry.name}`, () => actions.newInFolder(entry)),
     headButton("group-close", "close", closeLabel, () => actions.closeGroup(entry)),
@@ -420,16 +428,19 @@ function renderGroup(entry, paths, view, actions) {
 }
 
 // A hidden group stays hidden only while it holds nothing but PRs: a session opened there
-// brings it back.
-export function visibleGroups(tabs, prs, hidden, order = []) {
-  return groupItems(tabs, prs, order).filter((entry) => entry.tabs.length || !hidden.has(entry.path));
+// brings it back. A kept group is never hidden: closing one is what stops keeping it.
+export function visibleGroups(tabs, prs, hidden, order = [], kept = []) {
+  return groupItems(tabs, prs, order, kept).filter(
+    (entry) => entry.tabs.length || !hidden.has(entry.path),
+  );
 }
 
 // `view` says what is on stage: the active tab, any PR being reviewed over it, which groups
-// are folded (a Set of paths) and which are hidden. `order` is how the user arranged them.
+// are folded (a Set of paths), which are hidden, and which are kept with no tab
+// (`{path, name}` each). `order` is how the user arranged them.
 export function renderSidebar(container, tabs, prs, view, actions, order = []) {
   const scroll = container.scrollTop;
-  const entries = visibleGroups(tabs, prs, view.hidden, order);
+  const entries = visibleGroups(tabs, prs, view.hidden, order, view.kept ?? []);
   const paths = entries.map((entry) => entry.path);
   container.replaceChildren(...entries.map((entry) => renderGroup(entry, paths, view, actions)));
   container.scrollTop = scroll;

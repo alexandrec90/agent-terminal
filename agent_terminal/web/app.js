@@ -2,7 +2,7 @@ import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
 import { ReviewPanel } from "./review.js";
-import { renderSidebar } from "./sidebar.js";
+import { refreshTimes, renderSidebar } from "./sidebar.js";
 import { Terminals } from "./terminals.js";
 
 const groups = document.getElementById("groups");
@@ -10,10 +10,17 @@ const empty = document.getElementById("empty");
 
 let tabs = [];
 let prs = [];
+let groupOrder = [];
 let activeId = null;
 let folded = new Set();
 let hidden = new Set();
 let synced = false;
+// Mid-drag, a redraw would take the dragged row away: hold it until the drop.
+let dragging = false;
+let renderHeld = false;
+
+// Each "… ago" in the sidebar moves on by itself; a minute is its smallest step.
+const TIME_REFRESH_MS = 30_000;
 
 function plural(count, word) {
   return count === 1 ? `${count} ${word}` : `${count} ${word}s`;
@@ -41,6 +48,12 @@ const actions = {
   },
   close: (id) => send({ type: "close", id }),
   togglePark: (id) => send({ type: "toggle_park", id }),
+  moveTab: (id, before) => send({ type: "move_tab", id, before }),
+  orderGroups: (paths) => send({ type: "order_groups", paths }),
+  dragging: (active) => {
+    dragging = active;
+    if (!active && renderHeld) render();
+  },
   newInFolder: (entry) => dialog.open({ path: entry.path, name: entry.name }),
   toggleGroup: (path) => send({ type: "fold_group", path, folded: !folded.has(path) }),
   closeGroup,
@@ -91,8 +104,10 @@ function linkedTab() {
 }
 
 function render() {
+  renderHeld = dragging;
+  if (dragging) return;
   const view = { activeId: review.pr ? null : activeId, reviewing: review.pr, folded, hidden };
-  renderSidebar(groups, tabs, prs, view, actions);
+  renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
   empty.hidden = tabs.length > 0 || review.pr !== null;
 }
@@ -107,6 +122,7 @@ function applyState(state) {
   }
   tabs = state.tabs;
   prs = state.prs;
+  groupOrder = state.group_order ?? [];
   folded = new Set(state.folded);
   hidden = new Set(state.hidden);
   if (state.active_id !== activeId) review.close();
@@ -172,6 +188,8 @@ window.__agentTerminal = {
   tabs: () => tabs,
   prs: () => prs,
 };
+
+setInterval(() => refreshTimes(groups), TIME_REFRESH_MS);
 
 document.getElementById("new-group").addEventListener("click", () => dialog.open());
 document.getElementById("empty-new").addEventListener("click", () => dialog.open());

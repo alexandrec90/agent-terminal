@@ -187,6 +187,7 @@ def test_a_page_says_hello_and_hears_the_projects(backend):
             "type": "state",
             "active_id": None,
             "tabs": [],
+            "group_order": [],
             "prs": [],
             "folded": [],
             "hidden": [],

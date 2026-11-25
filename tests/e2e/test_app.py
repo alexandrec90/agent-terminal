@@ -254,6 +254,43 @@ def test_groups_follow_their_sessions(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_tabs_and_groups_are_reordered_by_dragging(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        first = await open_tab(window, "alpha")
+        second = await open_tab(window, "alpha")
+        other = await open_tab(window, "beta")
+        groups = "[...document.querySelectorAll('.group')].map(g => g.dataset.project)"
+        alpha_tabs = "[...document.querySelectorAll('[data-project=\"alpha\"] .tab')]"
+        order = f"{alpha_tabs}.map(t => t.dataset.id)"
+        assert await window.js(order) == [first, second]
+
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]')
+        await window.wait(f"{order}[0] === {json.dumps(second)}", "the tab dragged up")
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]', below=True)
+        await window.wait(f"{order}[0] === {json.dumps(first)}", "the tab dragged back down")
+
+        # Out of its group it will not go: the drop is refused and nothing moves.
+        await window.drag(f'[data-id="{first}"]', f'[data-id="{other}"]')
+        await asyncio.sleep(0.5)
+        assert await window.js(order) == [first, second]
+        assert await window.js(
+            f"{json.dumps(first)} === document.querySelector("
+            "'[data-project=\"alpha\"] .tab').dataset.id"
+        )
+
+        await window.drag('[data-project="beta"] .group-head', '[data-project="alpha"]')
+        await window.wait(f"{groups}[0] === 'beta'", "the group dragged up")
+        assert await window.js(groups) == ["beta", "alpha"]
+        assert (
+            await window.js(
+                "document.querySelectorAll('.dragging, .drop-before, .drop-after').length"
+            )
+            == 0
+        )
+
+    scenario(tmp_path, body)
+
+
 def test_a_group_folds_to_its_heading_and_back(tmp_path):
     async def body(_app: App, window: Window) -> None:
         await open_tab(window, "alpha")
@@ -274,6 +311,35 @@ def test_a_group_folds_to_its_heading_and_back(tmp_path):
         await window.click('[data-project="alpha"] .group-head')
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 1", "the group to unfold")
+
+    scenario(tmp_path, body)
+
+
+def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        label = f"document.querySelector('[data-id=\"{tab}\"] .tab-time')"
+        assert await window.js(f"{label}.textContent") == "just now"
+        await window.type_into(tab, "finish\r")
+        await window.wait_class(tab, has("finished"), "a turn finished")
+        assert await window.js(f"{label}.textContent") == "just now"
+
+        cases = {
+            "30": "just now",
+            "90": "1 minute ago",
+            str(5 * 3600): "5 hours ago",
+            str(86400): "1 day ago",
+            str(7 * 86400): "1 week ago",
+            str(15 * 86400): "2 weeks ago",
+            str(60 * 86400): "2 months ago",
+            str(400 * 86400): "1 year ago",
+            "-5": "just now",
+        }
+        labels = await window.js(
+            "import('./sidebar.js').then(m => "
+            f"{json.dumps(list(cases))}.map(s => m.timeAgo(1000, 1000 + Number(s))))"
+        )
+        assert labels == list(cases.values())
 
     scenario(tmp_path, body)
 

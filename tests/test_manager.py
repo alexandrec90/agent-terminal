@@ -495,10 +495,13 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "close", "id": tab["id"]})
+    # The group's place is kept, for the next tab opened in that folder.
+    repo = str(rig.repo.resolve())
     assert rig.state() == {
         "type": "state",
         "active_id": None,
         "tabs": [],
+        "group_order": [repo],
         "prs": [],
         "folded": [],
         "hidden": [],
@@ -793,6 +796,141 @@ async def test_shutdown_saves_and_ends_every_process(rig):
     assert saved.tabs[0].parked is True
     assert saved.active_id == tab["id"]
     assert rig.killed == [100]
+
+
+def ids(rig: Rig) -> list[str]:
+    return [t["id"] for t in rig.tabs()]
+
+
+async def two_groups(rig: Rig) -> tuple[list[str], list[str]]:
+    """Tabs a1, b1, a2, a3 in that order: `repo` is a, `plain` is b."""
+    a1 = (await rig.create())["id"]
+    b1 = (await rig.create(rig.plain))["id"]
+    a2 = (await rig.create())["id"]
+    a3 = (await rig.create())["id"]
+    return [a1, a2, a3], [b1]
+
+
+@run
+async def test_a_tab_moves_before_another_of_its_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a3, "before": a1})
+    assert ids(rig) == [a3, a1, b1, a2]
+
+
+@run
+async def test_a_tab_moved_before_nothing_goes_last_in_its_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a1, "before": None})
+    assert ids(rig) == [b1, a2, a3, a1]
+    # Group order is its own record, so tabs moving about never reorders the groups.
+    assert rig.state()["group_order"] == [str(rig.repo.resolve()), str(rig.plain.resolve())]
+
+
+@run
+async def test_a_tab_cannot_move_into_another_group(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a1, "before": b1})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@run
+async def test_a_tab_moved_before_itself_stays(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": a2, "before": a2})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@run
+async def test_the_only_tab_of_a_group_moved_last_stays_put(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    await rig.manager.handle({"type": "move_tab", "id": b1, "before": None})
+    assert ids(rig) == [a1, b1, a2, a3]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "move_tab", "id": "absent", "before": None},
+        {"type": "move_tab", "id": "FIRST", "before": "absent"},
+        {"type": "move_tab"},
+        {"type": "order_groups"},
+        {"type": "order_groups", "paths": "C:\\a"},
+        {"type": "order_groups", "paths": [1, 2]},
+    ],
+)
+def test_a_bad_reorder_is_dropped_and_changes_nothing(tmp_path, message):
+    async def body():
+        rig = Rig(tmp_path, asyncio.get_running_loop())
+        try:
+            await rig.hello()
+            first = await rig.create()
+            await rig.create(rig.plain)
+            before = rig.state()
+            filled = {k: first["id"] if v == "FIRST" else v for k, v in message.items()}
+            await rig.manager.handle(filled)
+            assert rig.state() == before
+        finally:
+            for process in rig.processes:
+                process.end(0)
+
+    asyncio.run(body())
+
+
+@run
+async def test_groups_take_the_order_the_page_gives(rig):
+    await rig.hello()
+    await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    assert rig.state()["group_order"] == [repo, plain]
+    await rig.manager.handle({"type": "order_groups", "paths": [plain, repo, plain]})
+    assert rig.state()["group_order"] == [plain, repo]
+
+
+@run
+async def test_a_group_the_page_did_not_name_keeps_its_place_after(rig):
+    await rig.hello()
+    await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    await rig.manager.handle({"type": "order_groups", "paths": ["C:\\pr-only", plain]})
+    assert rig.state()["group_order"] == ["C:\\pr-only", plain, repo]
+
+
+@run
+async def test_tab_and_group_order_survive_a_restart(rig):
+    await rig.hello()
+    (a1, a2, a3), (b1,) = await two_groups(rig)
+    repo, plain = str(rig.repo.resolve()), str(rig.plain.resolve())
+    await rig.manager.handle({"type": "move_tab", "id": a3, "before": a1})
+    await rig.manager.handle({"type": "order_groups", "paths": [plain, repo]})
+    await rig.manager.shutdown()
+    saved = load_snapshot(rig.settings.state_file)
+    assert [t.id for t in saved.tabs] == [a3, a1, b1, a2]
+    assert saved.group_order == [plain, repo]
+
+
+@run
+async def test_a_restore_from_before_group_order_orders_groups_as_they_appear(rig):
+    b, a = str(rig.plain), str(rig.repo)
+    tabs = [make_saved_tab(b, id="b"), make_saved_tab(a, id="a"), make_saved_tab(b, id="c")]
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=tabs))
+    await rig.hello()
+    assert rig.state()["group_order"] == [b, a]
+
+
+@run
+async def test_a_tab_says_when_it_was_last_updated(rig):
+    await rig.hello()
+    tab = await rig.create()
+    assert tab["updated_at"] is None
+    await rig.manager.handle({"type": "input", "id": tab["id"], "data": "go\r"})
+    await rig.output(tab["id"], status("working"))
+    assert rig.tabs()[0]["updated_at"] >= tab["created_at"]
 
 
 def write_rollout(settings: Settings, session_id: str, cwd: str, started: str) -> None:

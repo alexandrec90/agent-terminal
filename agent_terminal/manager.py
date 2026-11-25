@@ -12,6 +12,7 @@ from typing import Any
 from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit
 from agent_terminal.groups import Groups, open_folders, successor
+from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
 from agent_terminal.project_requests import ProjectRequests
@@ -56,6 +57,7 @@ class TabManager:
         self._desktop = desktop or Desktop()
         self._tabs: list[Tab] = []
         self._active_id: str | None = None
+        self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._groups = Groups(self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
@@ -96,6 +98,7 @@ class TabManager:
             "pr_resume": self._on_pr_resume,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **self._ordering.handlers(),
             **self._projects.handlers(),
         }
 
@@ -147,6 +150,7 @@ class TabManager:
 
     async def _open(self, tab: Tab) -> None:
         self._tabs.append(tab)
+        self._ordering.place(tab.project_path)
         self._active_id = switch_view(self._tabs, self._active_id, tab.id)
         self._groups.opened(tab.project_path)
         self.runner.add(tab)
@@ -233,6 +237,7 @@ class TabManager:
                 "type": "state",
                 "active_id": self._active_id,
                 "tabs": tabs,
+                "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
                 **self._groups.fields(),
             }
@@ -243,6 +248,7 @@ class TabManager:
         return Snapshot(
             tabs=self._tabs,
             active_id=self._active_id,
+            group_order=self._ordering.group_order,
             folded=groups["folded"],
             hidden=groups["hidden"],
         )
@@ -250,6 +256,7 @@ class TabManager:
     async def _restore(self) -> None:
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
+        self._ordering.restore(snapshot.group_order)
         self._groups.restore(snapshot.folded, snapshot.hidden)
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None

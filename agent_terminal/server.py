@@ -16,6 +16,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from agent_terminal import close_guard
 from agent_terminal.desktop import Desktop
 from agent_terminal.manager import TabManager
 from agent_terminal.settings import Settings
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).parent / "web"
 HOST = "127.0.0.1"
 SHUTDOWN_TIMEOUT_SECONDS = 15
+# Asked from the window's own thread as it closes, which hangs while this waits.
+BUSY_QUERY_TIMEOUT_SECONDS = 2
 # These wait on a native dialog, on git, or on GitHub, for seconds or for as long as the
 # user likes. Handled in turn, they would hold up every keystroke to every tab behind them.
 SLOW_MESSAGES = frozenset(
@@ -85,6 +88,21 @@ class Backend:
         """Start serving and return once `url` is good."""
         threading.Thread(target=self._loop.run_forever, name="backend", daemon=True).start()
         asyncio.run_coroutine_threadsafe(self._serve(), self._loop).result()
+
+    def busy_tabs(self) -> list[str] | None:
+        """From any thread: the tabs whose agent is mid-turn, or None if the event loop
+        did not answer in time."""
+
+        async def ask() -> list[str]:
+            return close_guard.busy_tabs(self._manager.runner.live.values())
+
+        future = asyncio.run_coroutine_threadsafe(ask(), self._loop)
+        try:
+            return future.result(timeout=BUSY_QUERY_TIMEOUT_SECONDS)
+        except TimeoutError:
+            future.cancel()
+            log.warning("busy-tab query timed out")
+            return None
 
     def stop(self) -> None:
         """Save the tabs and end every process."""

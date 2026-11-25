@@ -6,9 +6,11 @@ import ctypes
 import importlib
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from agent_terminal.close_guard import guard_window
 from agent_terminal.desktop import Desktop
 from agent_terminal.instance import WINDOW_TITLE, acquire_instance_lock, focus_running_window
 from agent_terminal.server import Backend
@@ -57,9 +59,10 @@ class FolderPicker:
         return str(chosen[0]) if chosen else None
 
 
-def run_window(url: str, picker: FolderPicker) -> None:
-    """Show the page, returning when the window closes. `webview` is imported here
-    because it needs the Windows runtime the suite does not have."""
+def run_window(url: str, picker: FolderPicker, busy: Callable[[], list[str] | None]) -> None:
+    """Show the page, returning when the window closes; closing on a busy agent asks
+    first. `webview` is imported here because it needs the Windows runtime the suite
+    does not have."""
     webview = importlib.import_module("webview")
     # Before the window: the taskbar reads the identity when the button is created.
     claim_taskbar_identity()
@@ -70,6 +73,7 @@ def run_window(url: str, picker: FolderPicker) -> None:
         height=WINDOW_SIZE[1],
         background_color=BACKGROUND,
     )
+    guard_window(picker.window, busy)
     webview.start(func=brand_window, args=(picker.window, APP_ICON), icon=str(APP_ICON))
 
 
@@ -91,7 +95,7 @@ def main() -> int:
     backend = Backend(settings, desktop=Desktop(pick_folder=picker))
     try:
         backend.start()
-        run_window(backend.url, picker)
+        run_window(backend.url, picker, backend.busy_tabs)
     except Exception:
         log.exception("agent terminal failed")
         raise

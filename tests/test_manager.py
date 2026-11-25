@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from agent_terminal import close_guard
 from agent_terminal import manager as module
 from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION, QUERY_REPLY
 from agent_terminal.desktop import Desktop, is_web_url
@@ -413,6 +414,26 @@ async def test_answering_clears_attention(rig):
     await rig.manager.handle({"type": "input", "id": tab["id"], "data": "1"})
     await rig.output(tab["id"], status("working"))
     assert rig.tabs()[0]["attention"] == NO_ATTENTION
+
+
+@run
+async def test_busy_tabs_are_those_mid_turn(rig):
+    await rig.hello()
+    working = await rig.create()
+    blocked = await rig.create(rig.plain)
+    idle = await rig.create()
+    await rig.output(working["id"], status("working") + f"\x1b]0;Fixing the build{ST}")
+    await rig.output(blocked["id"], status("working") + status("blocked"))
+    await rig.output(idle["id"], status("working") + status("idle"))
+    busy = close_guard.busy_tabs(rig.manager.runner.live.values())
+    assert busy == ["repo: Fixing the build", "plain"]
+
+
+@run
+async def test_no_tab_is_busy_before_its_agent_says_so(rig):
+    await rig.hello()
+    await rig.create()
+    assert close_guard.busy_tabs(rig.manager.runner.live.values()) == []
 
 
 @run

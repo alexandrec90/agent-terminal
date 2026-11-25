@@ -1006,15 +1006,91 @@ legend {
   white-space: pre-wrap;
 }
 
-#remote-toggle {
+#remote-toggle,
+#scaffold-toggle {
+  display: block;
   margin-top: 8px;
   padding: 0;
   color: var(--accent);
   font-size: 12px;
 }
 
-#remote-toggle:hover {
+#remote-toggle:hover,
+#scaffold-toggle:hover {
   text-decoration: underline;
+}
+
+#scaffold {
+  margin-top: 6px;
+}
+
+#scaffold-status {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+#scaffold-status:empty {
+  display: none;
+}
+
+#scaffold-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#scaffold-fields[hidden] {
+  display: none;
+}
+
+#scaffold-fields input[type="text"],
+#scaffold-preset {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+#scaffold-fields input[type="text"]:focus,
+#scaffold-preset:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.scaffold-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.scaffold-actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.scaffold-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.scaffold-actions button:disabled {
+  color: var(--muted);
+}
+
+#scaffold-output {
+  max-height: 25vh;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font: 11px/1.4 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
 }
 
 #remote {

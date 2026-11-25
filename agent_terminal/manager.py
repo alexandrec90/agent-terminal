@@ -18,6 +18,7 @@ from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
 from agent_terminal.project_requests import ProjectRequests
+from agent_terminal.scaffold import NewProjectRequests
 from agent_terminal.prs import Gh
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.sessions import LocalSessions, SessionSource
@@ -120,6 +121,7 @@ class TabManager:
             **history.handlers(),
             **self._ordering.handlers(),
             **self._projects.handlers(),
+            **NewProjectRequests(settings, emit, loop, self._projects.send_projects).handlers(),
             **(handlers or {}),
         }
 

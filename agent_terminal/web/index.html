@@ -56,6 +56,39 @@
             <p id="remote-status"></p>
             <div id="remote-list"></div>
           </div>
+          <button type="button" id="scaffold-toggle" aria-expanded="false">
+            Create a new project from devkit…
+          </button>
+          <div id="scaffold" hidden>
+            <p id="scaffold-status"></p>
+            <div id="scaffold-fields">
+              <input
+                id="scaffold-name"
+                type="text"
+                placeholder="Name: the folder, the package and the Docker project"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <input
+                id="scaffold-description"
+                type="text"
+                placeholder="One-line description"
+                autocomplete="off"
+              />
+              <select id="scaffold-preset" aria-label="Project shape"></select>
+              <label class="toggle">
+                <input type="checkbox" id="scaffold-remote" checked />
+                <span>Create a public GitHub repository and push to it</span>
+              </label>
+              <div class="scaffold-actions">
+                <button type="button" id="scaffold-preview" title="Show the plan; write nothing">
+                  Preview
+                </button>
+                <button type="button" id="scaffold-create">Create</button>
+              </div>
+            </div>
+            <pre id="scaffold-output" hidden></pre>
+          </div>
         </fieldset>
 
         <fieldset id="resume-field" hidden>

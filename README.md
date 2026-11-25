@@ -28,6 +28,7 @@ Starting it a second time brings the running window forward.
 | Fold a group | Click its heading; folded, it shows a count, amber or blue if a session wants you |
 | Close a group | **×** on its heading (on hover): closes every session in it after asking, and hides its PRs until a session opens there |
 | Clone a repository | **+ New group** → **Clone one of your GitHub repositories…**: lists yours not yet in the projects root |
+| Create a project | **+ New group** → **Create a new project from devkit…**: a name, a preset and whether to make its public GitHub repo. **Preview** shows the plan and writes nothing; **Create** runs devkit's `new-project.py` and chooses the new project. The run is kept in `new-project.log` in the data folder |
 | Delete a project | The bin beside it in **+ New group**. It goes to the Recycle Bin, after a warning naming anything not pushed; one with a tab open is refused |
 | Put a new line in a prompt | Shift+Enter or Ctrl+Enter |
 | Copy / paste in a terminal | Right-click: copies a selection, pastes if there is none |

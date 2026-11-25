@@ -1,6 +1,8 @@
 // The tab groups: one per folder with a session or an open PR, in the order they first
 // appeared. PR text was written by whoever opened it, so it only ever goes in as text.
 
+import { icon } from "./icons.js";
+
 const STATUS_TEXT = {
   starting: "starting",
   working: "working",
@@ -14,21 +16,6 @@ const ATTENTION_TEXT = { input: "needs your input", finished: "finished" };
 
 // Each names a symbol in icons/ui.svg.
 const CHECK_ICON = { passing: "check", failing: "failing", pending: "pending", none: "pr-open" };
-
-const SVG = "http://www.w3.org/2000/svg";
-
-// One of the interface icons, colored by the CSS `color` of whatever holds it. Drawn for
-// 16px: `.icon` keeps it there.
-function icon(name) {
-  const svg = document.createElementNS(SVG, "svg");
-  svg.setAttribute("class", "icon");
-  svg.setAttribute("aria-hidden", "true");
-  svg.dataset.icon = name;
-  const use = document.createElementNS(SVG, "use");
-  use.setAttribute("href", `icons/ui.svg#${name}`);
-  svg.append(use);
-  return svg;
-}
 
 function group(groups, path, name) {
   if (!groups.has(path)) {
@@ -188,37 +175,84 @@ function renderPr(pr, reviewing, actions) {
   return row;
 }
 
-function renderGroup(entry, view, actions) {
-  const section = document.createElement("section");
-  section.className = "group";
-  section.dataset.project = entry.name;
-  section.dataset.path = entry.path;
+function headButton(className, iconName, label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(icon(iconName));
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
+}
 
+// What a folded group still says: how much is in it, and whether any of it wants the user.
+function foldedSummary(entry) {
+  const parts = [];
+  if (entry.tabs.length) parts.push(`${entry.tabs.length}`);
+  if (entry.prs.length) parts.push(`${entry.prs.length} PR`);
+  const summary = span("group-count", parts.join(" · "));
+  if (entry.tabs.some((tab) => !tab.parked && needsInput(tab))) {
+    summary.classList.add("input");
+    summary.title = "A session in here needs your input";
+  } else if (entry.tabs.some((tab) => !tab.parked && tab.attention === "finished")) {
+    summary.classList.add("finished");
+    summary.title = "A session in here has finished";
+  }
+  return summary;
+}
+
+function renderHead(entry, folded, actions) {
   const head = document.createElement("div");
   head.className = "group-head";
   head.title = entry.path;
-  const add = document.createElement("button");
-  add.type = "button";
-  add.className = "group-add";
-  add.title = `New session in ${entry.name}`;
-  add.setAttribute("aria-label", add.title);
-  add.append(icon("add"));
-  add.addEventListener("click", () => actions.newInFolder(entry));
-  head.append(span("group-name", entry.name), add);
+  head.setAttribute("role", "button");
+  head.setAttribute("aria-expanded", String(!folded));
+  head.addEventListener("click", () => actions.toggleGroup(entry.path));
 
-  section.append(
-    head,
-    ...entry.tabs.map((tab) => renderTab(tab, view.activeId, actions)),
-    ...entry.prs.map((pr) => renderPr(pr, view.reviewing, actions)),
+  const fold = span("group-fold", "");
+  fold.append(icon("chevron"));
+  head.append(fold, span("group-name", entry.name));
+  if (folded) head.append(foldedSummary(entry));
+  const closeLabel = entry.tabs.length ? `Close every session in ${entry.name}` : `Hide ${entry.name}`;
+  head.append(
+    headButton("group-add", "add", `New session in ${entry.name}`, () => actions.newInFolder(entry)),
+    headButton("group-close", "close", closeLabel, () => actions.closeGroup(entry)),
   );
+  return head;
+}
+
+function renderGroup(entry, view, actions) {
+  const section = document.createElement("section");
+  const folded = view.folded.has(entry.path);
+  section.className = folded ? "group folded" : "group";
+  section.dataset.project = entry.name;
+  section.dataset.path = entry.path;
+  section.append(renderHead(entry, folded, actions));
+  if (!folded) {
+    section.append(
+      ...entry.tabs.map((tab) => renderTab(tab, view.activeId, actions)),
+      ...entry.prs.map((pr) => renderPr(pr, view.reviewing, actions)),
+    );
+  }
   return section;
 }
 
-// `view` says what is on stage: the active tab, and any PR being reviewed over it.
+// A hidden group stays hidden only while it holds nothing but PRs: a session opened there
+// brings it back.
+export function visibleGroups(tabs, prs, hidden) {
+  return groupItems(tabs, prs).filter((entry) => entry.tabs.length || !hidden.has(entry.path));
+}
+
+// `view` says what is on stage: the active tab, any PR being reviewed over it, which groups
+// are folded (a Set of paths) and which are hidden.
 export function renderSidebar(container, tabs, prs, view, actions) {
   const scroll = container.scrollTop;
   container.replaceChildren(
-    ...groupItems(tabs, prs).map((entry) => renderGroup(entry, view, actions)),
+    ...visibleGroups(tabs, prs, view.hidden).map((entry) => renderGroup(entry, view, actions)),
   );
   container.scrollTop = scroll;
 }

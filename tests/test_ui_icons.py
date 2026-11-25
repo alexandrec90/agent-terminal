@@ -26,6 +26,8 @@ ICONS = {
     "ship",
     "add",
     "close",
+    "chevron",
+    "trash",
     "folder",
     "terminal",
     "worktree",

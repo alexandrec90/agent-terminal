@@ -101,9 +101,7 @@ class TestDescribeFolder:
             "codex": False,
         }
 
-    def test_a_repository_under_a_trusted_folder_is_not_trusted_by_claude(
-        self, settings, tmp_path
-    ):
+    def test_a_repository_under_a_trusted_folder_is_not_trusted_by_claude(self, settings, tmp_path):
         repository = tmp_path / "repo"
         repository.mkdir()
         commit(repository)

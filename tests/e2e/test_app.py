@@ -196,7 +196,10 @@ def test_shift_enter_and_ctrl_enter_reach_the_agent_as_alt_enter(tmp_path):
         await window.press_enter(modifiers=2)
         await window.press_enter()
         await window.wait("window.__typed.includes('\\r')", "the plain Enter")
-        assert await window.js("window.__typed") == ["\x1b\r", "\x1b\r", "\r"]
+        # A focus report is sent whenever the window gains or loses it, as it may mid-test.
+        focus = ("\x1b[I", "\x1b[O")
+        typed = [data for data in await window.js("window.__typed") if data not in focus]
+        assert typed == ["\x1b\r", "\x1b\r", "\r"]
 
     scenario(tmp_path, body)
 

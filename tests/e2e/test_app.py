@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from driver import GIT_IDENTITY, App, Window
+from fake_agent import PROMPT
 
 from agent_terminal import clipboard
 
@@ -691,6 +692,20 @@ def test_right_click_in_a_terminal_pastes(tmp_path):
             await window.wait_class(tab, has("attention"), "the pasted command to run")
         finally:
             clipboard.write_text(saved)
+
+    scenario(tmp_path, body)
+
+
+def test_the_prompt_between_claudes_rules_is_shaded(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        shade = f"window.__agentTerminal.promptShade({json.dumps(tab)})"
+        assert await window.js(shade) is None, "nothing is boxed in before the prompt is drawn"
+        await window.type_into(tab, "compose\r")
+        rows = await window.wait(shade, "the prompt to be shaded")
+        assert rows["start"] == rows["end"], "only the prompt line lies between the rules"
+        screen = (await window.js(f"window.__agentTerminal.screen({json.dumps(tab)})")).split("\n")
+        assert screen[rows["start"]].startswith(PROMPT), screen
 
     scenario(tmp_path, body)
 

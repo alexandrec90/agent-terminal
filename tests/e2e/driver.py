@@ -169,6 +169,18 @@ class Window:
             f"window.__agentTerminal.send({{type:'input', id:{json.dumps(tab_id)}, data:{json.dumps(text)}}})"
         )
 
+    async def press_enter(self, modifiers: int = 0) -> None:
+        """Press Enter on the focused element. `modifiers` is DevTools': 2 Ctrl, 8 Shift."""
+        key = {
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "modifiers": modifiers,
+        }
+        # `text` is what makes the browser follow the keydown with a keypress.
+        await self._call("Input.dispatchKeyEvent", type="keyDown", text="\r", **key)
+        await self._call("Input.dispatchKeyEvent", type="keyUp", **key)
+
     async def tabs(self) -> list[dict[str, Any]]:
         return await self.js("window.__agentTerminal.tabs()")
 

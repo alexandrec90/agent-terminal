@@ -32,6 +32,21 @@ function clipboardKey(event, term, copy) {
   return event.code !== "KeyV";
 }
 
+// xterm sends a bare CR for Enter whatever is held with it, which submits the prompt.
+// ESC CR, as Alt+Enter, is a new line to Claude Code and Codex both; LF is one only to
+// Claude. Returning false does not stop the keypress that follows, so the browser must.
+function newLineKey(event, term) {
+  const held = event.shiftKey || event.ctrlKey;
+  if (event.key !== "Enter" || !held || event.altKey || event.metaKey || event.isComposing) {
+    return false;
+  }
+  if (event.type === "keydown") {
+    event.preventDefault();
+    term.input("\x1b\r");
+  }
+  return true;
+}
+
 export class Terminals {
   constructor(container, { send, openUrl }) {
     this.container = container;
@@ -87,7 +102,9 @@ export class Terminals {
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon((_event, url) => this.openUrl(url)));
     term.open(host);
-    term.attachCustomKeyEventHandler((event) => clipboardKey(event, term, this.copy));
+    term.attachCustomKeyEventHandler(
+      (event) => !newLineKey(event, term) && clipboardKey(event, term, this.copy),
+    );
     const entry = { term, host, shade: new PromptShade(term), replaying: false };
     term.onData((data) => {
       if (!entry.replaying) this.send({ type: "input", id, data });

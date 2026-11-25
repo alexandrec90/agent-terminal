@@ -59,6 +59,7 @@ const actions = {
   newInFolder: (entry) => dialog.open({ path: entry.path, name: entry.name }),
   toggleGroup: (path) => send({ type: "fold_group", path, folded: !folded.has(path) }),
   closeGroup,
+  land: (id) => send({ type: "land", id }),
   review: (pr) => {
     // Out of the terminal underneath, or typing here would reach its agent unseen.
     document.activeElement?.blur();

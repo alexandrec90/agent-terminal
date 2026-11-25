@@ -450,7 +450,42 @@ button {
   color: var(--muted);
 }
 
-button.tab-chip:hover {
+.tab-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  align-items: center;
+}
+
+.tab-chip.land {
+  color: var(--accent);
+}
+
+.tab-chip.land:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* What judges the change, each in its own time. */
+.tab-gates {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.gate {
+  color: var(--parked);
+}
+
+.gate.passing {
+  color: var(--working);
+}
+
+.gate.failing {
+  color: var(--failing);
+}
+
+button.tab-chip:not(:disabled):hover {
   outline: 1px solid currentcolor;
 }
 

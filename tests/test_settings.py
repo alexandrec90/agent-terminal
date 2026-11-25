@@ -35,6 +35,11 @@ def test_environment_overrides(monkeypatch, tmp_path):
     assert settings.claude_command == "fake"
 
 
+def test_devkit_is_beside_the_projects_unless_said_otherwise(tmp_path):
+    assert Settings(projects_root=tmp_path).devkit_root == tmp_path / "devkit"
+    assert Settings(devkit_dir=tmp_path / "other").devkit_root == tmp_path / "other"
+
+
 def test_files_live_in_the_data_dir(tmp_path):
     settings = Settings(data_dir=tmp_path)
     assert settings.state_file.parent == tmp_path

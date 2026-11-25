@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -200,7 +201,13 @@ async def test_a_tab_on_a_prs_branch_holds_it(rig):
 async def test_a_naked_prompt_has_neither(rig):
     tab = rig.tab(rig.worktree("a"))
     await rig.board.scan()
-    assert rig.board.tab_fields(tab) == {"ship": "", "branch": "worktree-a", "pr": None}
+    assert rig.board.tab_fields(tab) == {
+        "ship": "",
+        "branch": "worktree-a",
+        "pr": None,
+        "land": "",
+        "gates": (),
+    }
 
 
 @run
@@ -229,6 +236,45 @@ async def test_a_merged_pr_is_only_asked_about_once(rig):
     await rig.board.scan()
     await rig.board.refresh()
     assert rig.gh.branch_calls == ["worktree-a"]
+
+
+@run
+async def test_a_merged_pr_is_asked_about_until_its_checks_settle(rig):
+    rig.tab(rig.worktree("a"))
+    merged = replace(make_pr(7, state="MERGED"), merged_at=datetime.now(UTC).isoformat())
+    rig.gh.branches["worktree-a"] = replace(merged, ci="pending")
+    await rig.board.scan()
+    rig.gh.branches["worktree-a"] = replace(merged, ci="passing")
+    await rig.board.refresh()
+    await rig.board.refresh()
+    assert rig.gh.branch_calls == ["worktree-a", "worktree-a"]
+
+
+@run
+async def test_delivery_reaches_the_tab_and_says_so_once(rig):
+    tree = rig.worktree("a")
+    git(rig.repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+    skill = tree / ".claude" / "skills" / "land" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("land")
+    tab = rig.tab(tree)
+    rig.gh.open[rig.key()] = [replace(make_pr(7), ci="passing")]
+    await rig.board.refresh()
+    await rig.board.scan()
+    await rig.board.check_delivery()
+    changes = rig.changes
+    await rig.board.check_delivery()
+    fields = rig.board.tab_fields(tab)
+    assert fields["land"] == "push"
+    assert [(g["name"], g["state"]) for g in fields["gates"]] == [
+        ("ci", "passing"),
+        ("live", "pending"),
+    ]
+    assert rig.changes == changes
+    found = rig.board.pr_of_tab(tab.id)
+    assert found is not None
+    assert found.number == 7
+    assert rig.board.pr_of_tab("gone") is None
 
 
 @run

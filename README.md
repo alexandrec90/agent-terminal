@@ -100,6 +100,18 @@ open PRs each minute. So a project with an open PR has a group even with no sess
 | `ship refused` | The pass tried that intent and could not ship it |
 | `PR #12 ✓` | Its PR is open; `✗` checks failing, `…` running, `conflicts` needs a rebase |
 | `PR #12 merged` / `closed` | Its PR is done, and the tab is yours to close |
+| **Create PR** | It has changes and no PR: click to have its agent run devkit's `land` skill |
+| **Push** | Its PR is open and it has changes the PR has not: the same skill adds them |
+| **New PR** | Its PR merged and it has changes since: its agent ships those alone as a new one |
+
+The button needs the project to have the `land` skill, and works while the agent is at its
+prompt. It types there, so anything already typed is sent along with it.
+
+Beside a PR, an icon for each thing that judges it, gray until it has and then green or red:
+CI (GitHub's checks), local tests and E2E (devkit's scheduled tiers, which run after the
+merge, so a red may be another change's doing), and live. Live is green once the main
+checkout has the merge, or for this app once it has restarted on it. A type the project
+does not have shows no icon.
 
 A PR no tab holds is a row of its own in its group, marked `prompt on disk` if the
 worktree it came from still has a session to reopen. A tab and a PR are matched by the

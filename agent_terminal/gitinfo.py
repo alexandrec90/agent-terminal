@@ -99,14 +99,17 @@ def has_commits(folder: Path) -> bool:
     return True
 
 
-def contains_commit(folder: Path, commit: str) -> bool:
-    """Whether `folder`'s HEAD has `commit` in its history. False for a commit not fetched
-    yet, and for anything that is not a hash: it arrives from GitHub and goes on a command
-    line, where a leading `-` would be read as an option."""
+def contains_commit(folder: Path, commit: str, within: str = "HEAD") -> bool:
+    """Whether `within`, a commit of `folder`'s or its HEAD, has `commit` in its history.
+    False for a commit not fetched yet, and for anything that is not a hash: it arrives
+    from GitHub or a file and goes on a command line, where a leading `-` would be read as
+    an option."""
     if not COMMIT_HASH.fullmatch(commit):
         return False
+    if within != "HEAD" and not COMMIT_HASH.fullmatch(within):
+        return False
     try:
-        run_git(folder, "merge-base", "--is-ancestor", commit, "HEAD")
+        run_git(folder, "merge-base", "--is-ancestor", commit, within)
     except GitError:
         return False
     return True

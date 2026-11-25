@@ -11,6 +11,7 @@ const STATUS_TEXT = {
   idle: "ready",
   shell: "PowerShell",
   exited: "exited",
+  asleep: "asleep",
 };
 
 const ATTENTION_TEXT = { input: "needs your input", finished: "finished" };
@@ -213,6 +214,8 @@ function statusWord(tab) {
 
 // The states with an icon of their own; the rest keep the plain dot.
 function stateIcon(tab) {
+  // First: the row's color still says whether it is parked, finished or waiting.
+  if (tab.status === "asleep") return "asleep";
   if (tab.parked) return "parked";
   if (needsInput(tab) || tab.status === "blocked") return "input";
   if (tab.attention === "finished") return "finished";
@@ -230,7 +233,9 @@ function stateMark(name) {
 function tabMeta(tab) {
   const parts = [tab.agent];
   if (tab.worktree) parts.push("worktree");
-  parts.push(statusWord(tab));
+  const word = statusWord(tab);
+  parts.push(word);
+  if (tab.status === "asleep" && word !== "asleep") parts.push("asleep");
   return parts.join(" · ");
 }
 
@@ -284,6 +289,7 @@ function renderTab(tab, groupTabs, activeId, actions) {
   row.className = tabClasses(tab, activeId);
   row.dataset.id = tab.id;
   row.title = "Right-click to mark for later; drag to reorder";
+  if (tab.status === "asleep") row.title = `Asleep to save memory: click to resume\n${row.title}`;
   draggableTab(row, tab, groupTabs, actions);
 
   const main = span("tab-main", "");

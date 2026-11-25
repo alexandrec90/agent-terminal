@@ -21,6 +21,7 @@ from agent_terminal.prs import Gh
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.sessions import LocalSessions, SessionSource
 from agent_terminal.settings import Settings
+from agent_terminal.sleeper import Sleeper, SleeperLinks
 from agent_terminal.store import DebouncedSaver, Snapshot, Tab, load_snapshot
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,17 @@ class TabManager:
                 lambda tab_id: emit({"type": "reset", "id": tab_id}),
             ),
         )
+        self.sleeper = Sleeper(
+            settings,
+            loop,
+            self.runner,
+            SleeperLinks(
+                lambda: self._active_id,
+                lambda: self._size,
+                self._on_changed,
+                lambda tab_id: emit({"type": "reset", "id": tab_id}),
+            ),
+        )
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
@@ -130,6 +142,7 @@ class TabManager:
         self._restored = True
         self.board.start()
         await self._restore()
+        self.sleeper.start()
 
     async def _on_create(self, message: dict[str, Any]) -> None:
         agent = message["agent"]
@@ -203,7 +216,8 @@ class TabManager:
         self._size = (int(message["rows"]), int(message["cols"]))
         for live in self.runner.live.values():
             live.size = self._size
-            live.session.resize(*self._size)
+            if not live.tab.asleep:
+                live.session.resize(*self._size)
 
     async def _on_paste(self, message: dict[str, Any]) -> None:
         tab_id = self._tab(message["id"]).id
@@ -221,6 +235,8 @@ class TabManager:
         self._emit({"type": "output", "id": tab_id, "data": text})
 
     def _on_changed(self) -> None:
+        # Here, as every way of going to a tab ends in this.
+        self.sleeper.wake_active()
         self._saver.schedule()
         self._emit_state()
 
@@ -262,7 +278,7 @@ class TabManager:
 
     async def _restore(self) -> None:
         """Bring back the saved tabs: each one's process if it outlived the last window,
-        and a resumed agent if not."""
+        and a resumed agent if not. One left asleep stays so, unless it is on screen."""
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
         self._ordering.restore(snapshot.group_order)
@@ -276,6 +292,7 @@ class TabManager:
         adopted = []
         for tab in self._tabs:
             survivor = survivors.pop(tab.id, None)
+            tab.asleep = tab.asleep and survivor is None and tab.id != self._active_id
             if survivor is None:
                 self.runner.add(tab)
             else:
@@ -291,7 +308,7 @@ class TabManager:
             log.info("ending process %s: its tab was closed", leftover.key)
             await self.sessions.discard(leftover)
         kept = {tab_id for tab_id, _ in adopted}
-        for tab in [tab for tab in self._tabs if tab.id not in kept]:
+        for tab in [tab for tab in self._tabs if tab.id not in kept and not tab.asleep]:
             await self.runner.start(tab, self._size)
             await asyncio.sleep(RESTORE_GAP_SECONDS)
 
@@ -302,6 +319,7 @@ class TabManager:
         `keep_processes` is a restart's: every process is left running in the session
         host, with what the next window needs to carry on with it."""
         self.board.stop()
+        self.sleeper.stop()
         await self.runner.find_unfound_sessions()
         self._saver.save_now()
         if keep_processes:

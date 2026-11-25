@@ -270,9 +270,23 @@ def test_groups_follow_their_sessions(tmp_path):
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 2", "a second tab in the group")
 
+        # Its last tab closed, a group stays, with its "+" and "x", until that "x".
         await window.click('[data-project="beta"] .tab-close')
-        await window.wait(f"{groups}.length === 1", "the empty group to go")
+        beta_tabs = "document.querySelectorAll('[data-project=\"beta\"] .tab').length"
+        await window.wait(f"{beta_tabs} === 0", "the group's last tab to close")
+        assert await window.js(groups) == ["alpha", "beta"]
         assert first in {tab["id"] for tab in await window.tabs()}
+        for control in (".group-add", ".group-close"):
+            selector = json.dumps(f'[data-project="beta"] {control}')
+            assert await window.js(f"document.querySelector({selector}) !== null") is True
+
+        await window.drag('[data-project="beta"] .group-head', '[data-project="alpha"]')
+        await window.wait(f"{groups}[0] === 'beta'", "the empty group dragged up")
+
+        # Nothing in it to lose, so its "x" asks nothing.
+        await window.click('[data-project="beta"] .group-close')
+        await window.wait(f"{groups}.length === 1", "the empty group to go")
+        assert await window.js(groups) == ["alpha"]
 
     scenario(tmp_path, body)
 

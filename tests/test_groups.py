@@ -63,9 +63,9 @@ class TestGroups:
 
     def test_folds_and_unfolds_telling_the_page_each_time(self):
         asyncio.run(self.groups.on_fold({"path": "C:\\a", "folded": True}))
-        assert self.groups.fields() == {"folded": ["C:\\a"], "hidden": []}
+        assert self.groups.fields() == {"kept": [], "folded": ["C:\\a"], "hidden": []}
         asyncio.run(self.groups.on_fold({"path": "C:\\a", "folded": False}))
-        assert self.groups.fields() == {"folded": [], "hidden": []}
+        assert self.groups.fields() == {"kept": [], "folded": [], "hidden": []}
         assert self.changes == 2
 
     def test_close_hides_the_group_and_gives_its_tabs(self):
@@ -75,6 +75,37 @@ class TestGroups:
         assert self.groups.fields()["hidden"] == ["C:\\a"]
 
     def test_a_session_opened_there_brings_it_back_unfolded(self):
-        self.groups.restore(folded=["C:\\a", "C:\\b"], hidden=["C:\\a"])
+        self.groups.restore(folded=["C:\\a", "C:\\b"], hidden=["C:\\a"], kept=[])
         self.groups.opened("C:\\a")
-        assert self.groups.fields() == {"folded": ["C:\\b"], "hidden": []}
+        assert self.groups.fields() == {"kept": ["C:\\a"], "folded": ["C:\\b"], "hidden": []}
+
+    def test_a_group_opened_stays_kept_until_closed(self):
+        self.groups.opened("C:\\a")
+        self.groups.opened("C:\\b")
+        assert self.groups.fields()["kept"] == ["C:\\a", "C:\\b"]
+        self.groups.close({"path": "C:\\a"}, [])
+        assert self.groups.fields()["kept"] == ["C:\\b"]
+
+    def test_a_file_from_before_groups_were_kept_keeps_those_with_a_tab(self):
+        tabs = [tab("1", "C:\\a"), tab("2", "C:\\b"), tab("3", "C:\\a")]
+        self.groups.restore(folded=[], hidden=["C:\\c"], kept=None, tabs=tabs)
+        assert self.groups.fields()["kept"] == ["C:\\a", "C:\\b"]
+
+    def test_a_saved_kept_list_wins_over_the_tabs(self):
+        self.groups.restore(folded=[], hidden=[], kept=["C:\\z"], tabs=[tab("1", "C:\\a")])
+        assert self.groups.fields()["kept"] == ["C:\\z"]
+
+    def test_the_page_is_told_each_kept_groups_name(self):
+        # Built from `Path`: CI is Linux, where a backslash is no separator.
+        root = Path.cwd().anchor
+        alpha = str(Path(root) / "work" / "alpha")
+        self.groups.opened(alpha)
+        self.groups.opened(root)
+        assert self.groups.state_fields() == {
+            "kept": [
+                {"path": root, "name": str(Path(root))},
+                {"path": alpha, "name": "alpha"},
+            ],
+            "folded": [],
+            "hidden": [],
+        }

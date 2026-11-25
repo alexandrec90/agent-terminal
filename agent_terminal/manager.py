@@ -264,7 +264,7 @@ class TabManager:
                 "tabs": tabs,
                 "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
-                **self._groups.fields(),
+                **self._groups.state_fields(),
             }
         )
 
@@ -276,6 +276,7 @@ class TabManager:
             group_order=self._ordering.group_order,
             folded=groups["folded"],
             hidden=groups["hidden"],
+            kept=groups["kept"],
         )
 
     async def _restore(self) -> None:
@@ -284,7 +285,7 @@ class TabManager:
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
         self._ordering.restore(snapshot.group_order)
-        self._groups.restore(snapshot.folded, snapshot.hidden)
+        self._groups.restore(snapshot.folded, snapshot.hidden, snapshot.kept, self._tabs)
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None
         self._active_id = snapshot.active_id if snapshot.active_id in ids else fallback

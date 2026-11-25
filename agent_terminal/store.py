@@ -59,6 +59,9 @@ class Snapshot:
     # held only PRs, which stay out of the sidebar until a session opens there.
     folded: list[str] = field(default_factory=list)
     hidden: list[str] = field(default_factory=list)
+    # Groups that stay in the sidebar with no tab, until closed. None in a file from
+    # before they were kept.
+    kept: list[str] | None = None
 
 
 def paths_of(value: object) -> list[str]:
@@ -101,6 +104,7 @@ def parse_snapshot(text: str) -> Snapshot:
         group_order=clean_group_order(data.get("group_order")),
         folded=paths_of(data.get("folded")),
         hidden=paths_of(data.get("hidden")),
+        kept=None if data.get("kept") is None else paths_of(data["kept"]),
     )
 
 
@@ -137,6 +141,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
         "folded": snapshot.folded,
         "hidden": snapshot.hidden,
+        "kept": snapshot.kept,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

@@ -2,7 +2,7 @@
 
 Speaks the terminal side of what the real ones do: asks whether the terminal knows OSC
 7501, reports status with it, and records how it was launched. Each line of input is a
-command, so a test can type `ask`, `finish` or `quit` into a tab and watch the tab react.
+command, so a test can type `ask`, `finish`, `mouse` or `quit` into a tab and watch the tab react.
 """
 
 from __future__ import annotations
@@ -117,6 +117,9 @@ def main() -> int:
             status("working")
         elif command == "compose":
             compose()
+        elif command == "mouse":
+            # Mouse tracking with SGR reports, as Claude Code's fullscreen view asks for.
+            emit(f"{ESC}[?1000h{ESC}[?1006h")
         elif command == "quit":
             status("working")
             emit(f"{ESC}]7501;state=clear{ST}")

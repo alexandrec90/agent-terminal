@@ -8,11 +8,13 @@ import threading
 import webbrowser
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from agent_terminal import clipboard, folders, gitinfo
 from agent_terminal.gitinfo import GitError
+from agent_terminal.recycle import send_to_recycle_bin
 from agent_terminal.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ class Desktop:
     read_clipboard: Callable[[], str] = clipboard.read_text
     write_clipboard: Callable[[str], None] = clipboard.write_text
     pick_folder: Callable[[], str | None] = no_picker
+    recycle: Callable[[Path], None] = send_to_recycle_bin
 
 
 class DesktopRequests:

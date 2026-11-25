@@ -1,4 +1,5 @@
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -24,10 +25,27 @@ def make_tab(tmp_path: Path, agent: str, **fields) -> Tab:
     return Tab(id="t", agent=agent, **{**defaults, **fields})
 
 
-def write_claude_session(settings: Settings, session_id: str) -> None:
+def write_claude_session(settings: Settings, session_id: str, *records: dict) -> Path:
     directory = settings.claude_home / "projects" / "C--some-encoded-path"
     directory.mkdir(parents=True)
-    (directory / f"{session_id}.jsonl").write_text("{}\n")
+    transcript = directory / f"{session_id}.jsonl"
+    lines = [json.dumps(record) for record in records] or ["{}"]
+    transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return transcript
+
+
+def worktree_state(path: str) -> dict:
+    """The record `claude -w` writes, as Claude Code wrote it for a real session."""
+    return {
+        "type": "worktree-state",
+        "worktreeSession": {
+            "originalCwd": "C:\\repo",
+            "worktreePath": path,
+            "worktreeName": Path(path).name,
+            "worktreeBranch": f"worktree-{Path(path).name}",
+        },
+        "sessionId": "abc",
+    }
 
 
 class TestTabTree:
@@ -35,18 +53,59 @@ class TestTabTree:
         tab = make_tab(tmp_path, CLAUDE)
         assert agents.tab_tree(tab) == Path(tab.project_path)
 
-    def test_a_claude_worktree_follows_from_its_name(self, tmp_path):
-        tab = make_tab(tmp_path, CLAUDE, worktree_name="tab-1")
-        assert agents.tab_tree(tab) == agents.claude_worktree_dir(tab.project_path, "tab-1")
+    def test_a_new_worktree_is_the_projects_until_found(self, tmp_path):
+        tab = make_tab(tmp_path, CLAUDE, worktree=True)
+        assert agents.tab_tree(tab) == Path(tab.project_path)
 
-    def test_a_recorded_folder_outranks_either(self, tmp_path):
+    def test_a_recorded_folder_outranks_the_project(self, tmp_path):
         tab = make_tab(tmp_path, CODEX, worktree=True, cwd=str(tmp_path / "managed"))
         assert agents.tab_tree(tab) == tmp_path / "managed"
 
 
+class TestClaudeSessionTree:
+    def test_absent_before_a_first_message(self, settings):
+        assert agents.claude_session_tree(settings.claude_home, "abc") is None
+
+    def test_the_worktree_claude_named_for_itself(self, settings):
+        records = [{"type": "mode"}, worktree_state("C:\\repo\\.claude\\worktrees\\calm-otter")]
+        records.append({"type": "user", "cwd": "C:\\elsewhere"})
+        write_claude_session(settings, "abc", *records)
+        found = agents.claude_session_tree(settings.claude_home, "abc")
+        assert found == "C:\\repo\\.claude\\worktrees\\calm-otter"
+
+    def test_a_session_without_a_worktree_gives_its_cwd(self, settings):
+        records = [{"type": "file-history-snapshot"}, {"type": "user", "cwd": "C:\\repo"}]
+        write_claude_session(settings, "abc", *records)
+        assert agents.claude_session_tree(settings.claude_home, "abc") == "C:\\repo"
+
+    def test_a_cleared_worktree_state_is_passed_over(self, settings):
+        cleared = {"type": "worktree-state", "worktreeSession": None}
+        write_claude_session(settings, "abc", cleared, {"type": "user", "cwd": "C:\\repo"})
+        assert agents.claude_session_tree(settings.claude_home, "abc") == "C:\\repo"
+
+    def test_unreadable_lines_are_skipped(self, settings):
+        transcript = write_claude_session(settings, "abc")
+        transcript.write_text('not json\n[1]\n{"cwd": 3}\n{"cwd": "C:\\\\repo"}\n')
+        assert agents.claude_session_tree(settings.claude_home, "abc") == "C:\\repo"
+
+    def test_a_transcript_naming_no_folder_gives_none(self, settings):
+        write_claude_session(settings, "abc", {"type": "mode"})
+        assert agents.claude_session_tree(settings.claude_home, "abc") is None
+
+    def test_only_the_opening_lines_are_read(self, settings):
+        filler = [{"type": "mode"}] * agents.TRANSCRIPT_LINES_TO_READ
+        write_claude_session(settings, "abc", *filler, {"cwd": "C:\\late"})
+        assert agents.claude_session_tree(settings.claude_home, "abc") is None
+
+    def test_a_transcript_not_in_utf8_gives_none(self, settings):
+        transcript = write_claude_session(settings, "abc")
+        transcript.write_bytes(b'{"cwd": "\xff"}\n')
+        assert agents.claude_session_tree(settings.claude_home, "abc") is None
+
+
 class TestTrustLaunch:
     def test_runs_claude_alone_where_the_worktree_will_be_made_from(self, tmp_path, settings):
-        tab = make_tab(tmp_path, CLAUDE, worktree_name="tab-1", session_id="abc")
+        tab = make_tab(tmp_path, CLAUDE, worktree=True, session_id="abc")
         launch = agents.claude_trust_launch(tab, settings)
         assert launch == agents.Launch(tab.project_path, ["claude"])
 
@@ -66,19 +125,13 @@ class TestResumeFlag:
         assert agents.claude_launch(tab, settings).cwd == str(tmp_path)
 
 
-class TestNewTabIdentity:
+class TestNewSessionId:
     def test_claude_fixes_its_session_up_front(self):
-        session_id, worktree = agents.new_tab_identity(CLAUDE, worktree=False)
-        assert session_id is not None
-        assert worktree is None
-
-    def test_a_claude_worktree_gets_a_unique_name(self):
-        first = agents.new_tab_identity(CLAUDE, worktree=True)[1]
-        second = agents.new_tab_identity(CLAUDE, worktree=True)[1]
-        assert first and second and first != second
+        first = agents.new_session_id(CLAUDE)
+        assert first and first != agents.new_session_id(CLAUDE)
 
     def test_codex_chooses_for_itself(self):
-        assert agents.new_tab_identity(CODEX, worktree=True) == (None, None)
+        assert agents.new_session_id(CODEX) is None
 
 
 class TestClaudeSessionExists:
@@ -90,17 +143,45 @@ class TestClaudeSessionExists:
         assert not agents.claude_session_exists(settings.claude_home, "abc")
 
 
+class TestClaudeTranscript:
+    def test_the_file_whichever_folder_it_was_filed_under(self, settings):
+        written = write_claude_session(settings, "abc")
+        assert agents.claude_transcript(settings.claude_home, "abc") == written
+
+    def test_none_before_a_first_message(self, settings):
+        assert agents.claude_transcript(settings.claude_home, "abc") is None
+
+
 class TestClaudeLaunch:
     def test_a_new_session_fixes_its_id(self, tmp_path, settings):
         tab = make_tab(tmp_path, CLAUDE, session_id="abc")
         launch = agents.claude_launch(tab, settings)
         assert launch == agents.Launch(tab.project_path, ["claude", "--session-id", "abc"])
 
-    def test_a_new_worktree_session_passes_the_name(self, tmp_path, settings):
-        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, worktree_name="tab-1")
+    def test_a_new_worktree_session_lets_claude_name_it(self, tmp_path, settings):
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True)
         launch = agents.claude_launch(tab, settings)
         assert launch.cwd == tab.project_path
-        assert launch.argv == ["claude", "--session-id", "abc", "--worktree", "tab-1"]
+        assert launch.argv == ["claude", "--session-id", "abc", "--worktree"]
+        assert launch.makes_worktree
+
+    def test_a_plain_session_makes_no_worktree(self, tmp_path, settings):
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc")
+        assert not agents.claude_launch(tab, settings).makes_worktree
+
+    def test_a_tree_that_exists_already_is_started_in_not_cut_again(self, tmp_path, settings):
+        tree = tmp_path / "demo" / ".claude" / "worktrees" / "calm-otter"
+        tree.mkdir(parents=True)
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, cwd=str(tree))
+        launch = agents.claude_launch(tab, settings)
+        assert launch == agents.Launch(str(tree), ["claude", "--session-id", "abc"])
+
+    def test_a_removed_tree_is_cut_afresh(self, tmp_path, settings):
+        gone = str(tmp_path / "gone")
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, cwd=gone)
+        launch = agents.claude_launch(tab, settings)
+        assert launch.cwd == tab.project_path
+        assert launch.argv[-1] == "--worktree"
 
     def test_a_session_with_a_transcript_resumes(self, tmp_path, settings):
         write_claude_session(settings, "abc")
@@ -108,17 +189,25 @@ class TestClaudeLaunch:
         assert agents.claude_launch(tab, settings).argv == ["claude", "--resume", "abc"]
 
     def test_a_worktree_session_resumes_inside_the_worktree(self, tmp_path, settings):
-        write_claude_session(settings, "abc")
-        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, worktree_name="tab-1")
-        worktree = agents.claude_worktree_dir(tab.project_path, "tab-1")
+        worktree = tmp_path / "demo" / ".claude" / "worktrees" / "calm-otter"
         worktree.mkdir(parents=True)
+        write_claude_session(settings, "abc")
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, cwd=str(worktree))
         launch = agents.claude_launch(tab, settings)
         assert launch.cwd == str(worktree)
         assert "--worktree" not in launch.argv
 
+    def test_a_worktree_not_yet_recorded_is_read_from_the_transcript(self, tmp_path, settings):
+        # Named by Claude, here or in another terminal: the transcript is what says where.
+        worktree = tmp_path / "elsewhere" / "calm-otter"
+        worktree.mkdir(parents=True)
+        write_claude_session(settings, "abc", worktree_state(str(worktree)))
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True)
+        assert agents.claude_launch(tab, settings).cwd == str(worktree)
+
     def test_a_removed_worktree_falls_back_to_the_project(self, tmp_path, settings):
-        write_claude_session(settings, "abc")
-        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True, worktree_name="gone")
+        write_claude_session(settings, "abc", worktree_state(str(tmp_path / "gone")))
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc", worktree=True)
         launch = agents.claude_launch(tab, settings)
         assert launch.cwd == tab.project_path
 
@@ -139,7 +228,9 @@ class TestCodexLaunch:
 
     def test_a_new_worktree_session(self, tmp_path, settings):
         tab = make_tab(tmp_path, CODEX, worktree=True)
-        assert agents.codex_launch(tab, settings).argv == ["codex", "--worktree"]
+        launch = agents.codex_launch(tab, settings)
+        assert launch.argv == ["codex", "--worktree"]
+        assert launch.makes_worktree
 
     def test_a_found_session_resumes_where_it_ran(self, tmp_path, settings):
         tab = make_tab(tmp_path, CODEX, session_id="abc", cwd=str(tmp_path), worktree=True)

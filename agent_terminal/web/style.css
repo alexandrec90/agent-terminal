@@ -76,20 +76,69 @@ button {
 
 .group-head {
   display: flex;
+  gap: 4px;
   align-items: center;
-  justify-content: space-between;
-  padding: 2px 4px 4px 8px;
+  padding: 2px 4px 4px 2px;
+  border-radius: 4px;
   color: var(--muted);
   font-weight: 600;
+  cursor: pointer;
+}
+
+.group-head:hover {
+  color: var(--text);
+}
+
+.group-fold {
+  display: grid;
+  flex: none;
+  place-items: center;
+  transition: transform 0.1s;
+}
+
+.group.folded .group-fold {
+  transform: rotate(-90deg);
 }
 
 .group-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.group-count {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--panel-raised);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.group-count.input {
+  background: var(--attention-bg);
+  color: var(--attention);
+}
+
+.group-count.finished {
+  background: var(--finished-bg);
+  color: var(--finished);
+}
+
+/* Closing a whole group is rarer than adding to it: it shows on hover only. */
+.group-close {
+  visibility: hidden;
+}
+
+.group-head:hover .group-close,
+.group-close:focus-visible {
+  visibility: visible;
+}
+
 .group-add,
+.group-close,
+.project-delete,
 .tab-close {
   display: grid;
   flex: none;
@@ -101,6 +150,7 @@ button {
 }
 
 .group-add:hover,
+.group-close:hover,
 .tab-close:hover {
   background: var(--line);
   color: var(--text);
@@ -567,8 +617,11 @@ button.tab-chip:hover {
 
 /* ---- New session dialog ---- */
 
+/* Pinned from the top rather than centered: when a dialog does grow (a third note line),
+   it grows downward instead of shifting everything above it. */
 dialog {
   width: min(480px, calc(100vw - 32px));
+  margin: 12vh auto auto;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -597,15 +650,28 @@ legend {
   font-weight: 600;
 }
 
+/* The scroll box clips whatever paints outside it, so it is padded by the selected
+   outline's width (and pulled back out by the same, to keep the column aligned). */
 #project-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   max-height: 40vh;
+  margin: -2px;
+  padding: 2px;
   overflow-y: auto;
 }
 
+.project-item {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+}
+
 .project {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   padding: 7px 10px;
   border-radius: 6px;
@@ -621,6 +687,115 @@ legend {
 
 .project.selected {
   outline: 2px solid var(--accent);
+}
+
+.project-delete {
+  visibility: hidden;
+}
+
+.project-item:hover .project-delete,
+.project-delete:focus-visible {
+  visibility: visible;
+}
+
+.project-delete:hover {
+  background: var(--line);
+  color: var(--failing);
+}
+
+#project-message {
+  margin: 8px 0 0;
+  color: var(--failing);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+#remote-toggle {
+  margin-top: 8px;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+#remote-toggle:hover {
+  text-decoration: underline;
+}
+
+#remote {
+  margin-top: 6px;
+}
+
+#remote-status {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#remote-status:empty {
+  display: none;
+}
+
+#remote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.remote-repo {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--panel-raised);
+}
+
+.remote-repo.archived {
+  opacity: 0.6;
+}
+
+.remote-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.remote-name,
+.remote-about {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-about {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.remote-about:empty {
+  display: none;
+}
+
+.remote-clone {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.remote-clone:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.remote-clone:disabled {
+  color: var(--muted);
+}
+
+#confirm-text p {
+  margin: 0 0 6px;
 }
 
 .choices {
@@ -692,12 +867,21 @@ legend {
   background: var(--panel-raised);
 }
 
+/* The notes come and go as folders are inspected. Their room is kept either way, two
+   lines of it, so the dialog does not resize and re-center when one appears. */
 #folder-notes {
+  min-height: calc(2.8em + 16px);
   margin: 10px 0 0;
   padding: 8px 10px;
   border-left: 2px solid var(--attention);
   background: var(--panel-raised);
   font-size: 12px;
+  line-height: 1.4;
+}
+
+#folder-notes[hidden] {
+  display: block;
+  visibility: hidden;
 }
 
 #folder-notes p {

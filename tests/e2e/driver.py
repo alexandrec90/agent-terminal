@@ -137,11 +137,17 @@ class Window:
         """Wait for the backend's answer about the chosen folder."""
         await self.wait("!document.getElementById('new-tab-start').disabled", "the folder's facts")
 
-    async def start_session(self, agent: str = "claude", worktree: bool = False) -> None:
+    async def set_worktree(self, on: bool) -> None:
+        """Click the worktree box only if it is not already as wanted: it starts checked."""
+        if await self.js("document.getElementById('worktree').checked") != on:
+            await self.click("#worktree")
+
+    async def start_session(self, agent: str = "claude", worktree: bool | None = False) -> None:
+        """Start from the dialog; `worktree=None` leaves the box as it stands."""
         await self.dialog_ready()
         await self.click(f"input[name=agent][value={agent}]")
-        if worktree:
-            await self.click("#worktree")
+        if worktree is not None:
+            await self.set_worktree(worktree)
         await self.click("#new-tab-start")
 
     async def new_tab(self, project: str, agent: str = "claude", worktree: bool = False) -> None:
@@ -191,6 +197,7 @@ class App:
         self.claude_config = base / "claude.json"
         self.gh_state = base / "fake-gh.json"
         self.gh_log = base / "fake-gh.log"
+        self.gh_repos = base / "fake-gh-repos.json"
         self.port = free_port()
         self.real_agents = real_agents
         self.process: subprocess.Popen[bytes] | None = None
@@ -214,6 +221,7 @@ class App:
             env["AGENT_TERMINAL_PR_POLL_SECONDS"] = "1"
             env["FAKE_GH_STATE"] = str(self.gh_state)
             env["FAKE_GH_LOG"] = str(self.gh_log)
+            env["FAKE_GH_REPOS"] = str(self.gh_repos)
             env.update(GIT_IDENTITY)
         return env
 

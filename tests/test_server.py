@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import aiohttp
 import pytest
 
+from agent_terminal import server as server_module
 from agent_terminal.server import HOST, Backend, request_allowed
 from agent_terminal.settings import Settings
 
@@ -59,6 +60,28 @@ def test_a_slow_request_does_not_hold_up_the_messages_behind_it(backend):
                 released.set()
 
     asyncio.run(body())
+
+
+def test_busy_tabs_are_asked_of_the_loop_from_another_thread(backend, monkeypatch):
+    seen = []
+
+    def busy(live):
+        seen.append(threading.current_thread().name)
+        return ["demo: fixing"]
+
+    monkeypatch.setattr(server_module.close_guard, "busy_tabs", busy)
+    assert backend.busy_tabs() == ["demo: fixing"]
+    assert seen == ["backend"]
+
+
+def test_busy_tabs_is_none_when_the_loop_does_not_answer(backend, monkeypatch):
+    monkeypatch.setattr(server_module, "BUSY_QUERY_TIMEOUT_SECONDS", 0.05)
+    released = threading.Event()
+    backend._loop.call_soon_threadsafe(released.wait, 5)
+    try:
+        assert backend.busy_tabs() is None
+    finally:
+        released.set()
 
 
 def test_keystrokes_stay_in_order(backend):
@@ -166,6 +189,8 @@ def test_a_page_says_hello_and_hears_the_projects(backend):
             "tabs": [],
             "group_order": [],
             "prs": [],
+            "folded": [],
+            "hidden": [],
         }
 
     asyncio.run(body())

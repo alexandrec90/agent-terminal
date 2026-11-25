@@ -7,7 +7,8 @@ drops to a shell in the same place rather than closing the tab.
 from __future__ import annotations
 
 import base64
-import secrets
+import itertools
+import json
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,6 +41,10 @@ INHERITED_PREFIXES_TO_DROP = ("CLAUDE_CODE_SESSION_", "CLAUDE_CODE_MESSAGING_")
 # PowerShell's spelling of the OSC 7501 `clear` that `attention.py` reads.
 AGENT_RETURNED = '"`e]7501;state=clear`e\\"'
 
+# Records before the first `cwd` in a real transcript: mode, owner, worktree state and
+# file history. A generous bound, so a long transcript is never read whole.
+TRANSCRIPT_LINES_TO_READ = 200
+
 
 @dataclass(frozen=True)
 class Launch:
@@ -49,48 +54,80 @@ class Launch:
     argv: list[str]
     # A resumed session has been run here before, so its agent will not ask for trust.
     resumes: bool = False
+    # The agent cuts a worktree, which `claude -w` refuses to do in an untrusted folder.
+    makes_worktree: bool = False
 
 
-def new_tab_identity(agent: str, worktree: bool) -> tuple[str | None, str | None]:
-    """The session id and worktree name a new tab can fix before its agent starts.
-    Codex chooses both for itself, so it gets neither."""
-    if agent != CLAUDE:
-        return None, None
-    return str(uuid.uuid4()), f"tab-{secrets.token_hex(4)}" if worktree else None
+def new_session_id(agent: str) -> str | None:
+    """The session id a new tab fixes before its agent starts, so it can resume it and
+    read its folder back. Codex chooses its own, found later from its rollout."""
+    return str(uuid.uuid4()) if agent == CLAUDE else None
 
 
-def claude_worktree_dir(project_path: str, name: str) -> Path:
-    """Where `claude -w <name>` puts its checkout."""
-    return Path(project_path) / ".claude" / "worktrees" / name
+def claude_transcript(claude_home: Path, session_id: str) -> Path | None:
+    """Claude writes the transcript on the first message, so a tab closed before one
+    has nothing to resume. Found by name, as the directory encodes the cwd."""
+    return next(iter((claude_home / "projects").glob(f"*/{session_id}.jsonl")), None)
 
 
 def claude_session_exists(claude_home: Path, session_id: str) -> bool:
-    """Claude writes the transcript on the first message, so a tab closed before one
-    has nothing to resume. Found by name, as the directory encodes the cwd."""
-    return any((claude_home / "projects").glob(f"*/{session_id}.jsonl"))
+    return claude_transcript(claude_home, session_id) is not None
+
+
+def claude_session_tree(claude_home: Path, session_id: str) -> str | None:
+    """The folder a Claude session works in, read from its transcript: the worktree
+    `claude -w` named for itself, wherever the session was started. Its
+    `worktree-state` record and first `cwd` come within the opening lines."""
+    transcript = claude_transcript(claude_home, session_id)
+    if transcript is None:
+        return None
+    try:
+        with transcript.open(encoding="utf-8") as lines:
+            for line in itertools.islice(lines, TRANSCRIPT_LINES_TO_READ):
+                tree = _record_tree(line)
+                if tree:
+                    return tree
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _record_tree(line: str) -> str | None:
+    """The folder one transcript line names, if it names one."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    worktree = record.get("worktreeSession")
+    if isinstance(worktree, dict) and isinstance(worktree.get("worktreePath"), str):
+        return worktree["worktreePath"]
+    cwd = record.get("cwd")
+    return cwd if isinstance(cwd, str) else None
 
 
 def tab_tree(tab: Tab) -> Path:
-    """The folder a tab's agent works in: where its branch and ship intent are. `cwd` is
-    known once recorded; a Claude worktree's follows from its name."""
-    if tab.cwd:
-        return Path(tab.cwd)
-    if tab.worktree_name:
-        return claude_worktree_dir(tab.project_path, tab.worktree_name)
-    return Path(tab.project_path)
+    """The folder a tab's agent works in: where its branch and ship intent are. A new
+    worktree's is the project's until the agent's own record says where it went."""
+    return Path(tab.cwd) if tab.cwd else Path(tab.project_path)
 
 
 def claude_launch(tab: Tab, settings: Settings) -> Launch:
-    """Resume the tab's session if it has one, otherwise start it."""
+    """Resume the tab's session if it has one, otherwise start it. Claude names a new
+    worktree itself, as it does from any terminal."""
     session_id = tab.session_id or str(uuid.uuid4())
     if claude_session_exists(settings.claude_home, session_id):
         # `-w` would be taken as a request for a checkout, so resume from inside it.
-        tree = tab_tree(tab)
-        cwd = str(tree) if tree.is_dir() else tab.project_path
+        tree = tab.cwd or claude_session_tree(settings.claude_home, session_id)
+        cwd = tree if tree and Path(tree).is_dir() else tab.project_path
         return Launch(cwd, [settings.claude_command, "--resume", session_id], resumes=True)
     args = [settings.claude_command, "--session-id", session_id]
-    if tab.worktree_name:
-        args += ["--worktree", tab.worktree_name]
+    if tab.cwd and Path(tab.cwd).is_dir():
+        # Its tree exists already: a PR's, or one a tab closed before its first message.
+        return Launch(tab.cwd, args)
+    if tab.worktree:
+        return Launch(tab.project_path, [*args, "--worktree"], makes_worktree=True)
     return Launch(tab.project_path, args)
 
 
@@ -108,7 +145,7 @@ def codex_launch(tab: Tab, settings: Settings) -> Launch:
     args = [settings.codex_command]
     if tab.worktree:
         args.append("--worktree")
-    return Launch(tab.project_path, args)
+    return Launch(tab.project_path, args, makes_worktree=tab.worktree)
 
 
 def launch_for(tab: Tab, settings: Settings) -> Launch:

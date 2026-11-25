@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -77,7 +78,35 @@ def set_state(args: list[str], state: str) -> int:
     return 0
 
 
+def repo_list(_args: list[str]) -> int:
+    """The user's repositories, from the JSON file `FAKE_GH_REPOS` names."""
+    path = Path(os.environ["FAKE_GH_REPOS"])
+    print(path.read_text(encoding="utf-8") if path.exists() else "[]")
+    return 0
+
+
+def repo_clone(args: list[str]) -> int:
+    """A clone is an empty repository where it was asked for: no network, no GitHub."""
+    log(["repo", "clone", *args])
+    destination = Path(args[1])
+    destination.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=destination, check=True)  # noqa: S607 - git from PATH
+    return 0
+
+
+def repo(argv: list[str]) -> int:
+    command, *rest = argv
+    if command == "list":
+        return repo_list(rest)
+    if command == "clone":
+        return repo_clone(rest)
+    print(f"fake gh does not know repo {argv}", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str]) -> int:
+    if argv[:1] == ["repo"]:
+        return repo(argv[1:])
     if argv[:1] != ["pr"]:
         print(f"fake gh does not know {argv}", file=sys.stderr)
         return 2

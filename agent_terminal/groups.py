@@ -83,7 +83,9 @@ class Groups:
     def state_fields(self) -> dict[str, Any]:
         """For the state message: a kept group may have no tab to name it, so each
         carries its name."""
-        kept = [{"path": path, "name": folders.display_name(Path(path))} for path in sorted(self.kept)]
+        kept = [
+            {"path": path, "name": folders.display_name(Path(path))} for path in sorted(self.kept)
+        ]
         return {**self.fields(), "kept": kept}
 
     async def on_fold(self, message: dict[str, Any]) -> None:

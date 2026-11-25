@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # devkit's checkout, whose `logs/` hold its local test tiers' results. Beside the
     # projects unless said otherwise.
     devkit_dir: Path | None = None
+    # The Python that runs devkit's scripts, such as `new-project.py`: the one on PATH,
+    # as devkit's own tasks use, never this app's virtualenv.
+    python_command: str = "python"
     # GitHub moves slowly here: the fix pass runs every half hour. A poll of `gh` per
     # repository a minute is 700-odd requests an hour across a dozen, of 5000 allowed.
     pr_poll_seconds: float = 60.0

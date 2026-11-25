@@ -211,6 +211,7 @@ class App:
         self.gh_state = base / "fake-gh.json"
         self.gh_log = base / "fake-gh.log"
         self.gh_repos = base / "fake-gh-repos.json"
+        self.devkit = base / "devkit"
         self.port = free_port()
         self.real_agents = real_agents
         self.process: subprocess.Popen[bytes] | None = None
@@ -237,6 +238,9 @@ class App:
             env["FAKE_GH_STATE"] = str(self.gh_state)
             env["FAKE_GH_LOG"] = str(self.gh_log)
             env["FAKE_GH_REPOS"] = str(self.gh_repos)
+            # Empty unless a test writes a stand-in `scripts/new-project.py` into it.
+            env["AGENT_TERMINAL_DEVKIT_DIR"] = str(self.devkit)
+            env["AGENT_TERMINAL_PYTHON_COMMAND"] = sys.executable
             env.update(GIT_IDENTITY)
         return env
 

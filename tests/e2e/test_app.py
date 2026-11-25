@@ -411,6 +411,55 @@ def test_a_repository_on_github_can_be_cloned_from_the_dialog(tmp_path):
     scenario(tmp_path, body)
 
 
+# devkit's new-project.py as far as the dialog can tell: the same flags, and a folder
+# where it was asked for once applied. Nothing is rendered and nothing reaches GitHub.
+FAKE_NEW_PROJECT = """
+import argparse, pathlib
+parser = argparse.ArgumentParser()
+parser.add_argument("name")
+parser.add_argument("--description", default="")
+parser.add_argument("--preset", choices=["bare", "service"])
+parser.add_argument("--parent", default="")
+parser.add_argument("--remote", action="store_true")
+parser.add_argument("--no-remote", action="store_true")
+parser.add_argument("--dry-run", action="store_true")
+parser.add_argument("--yes", action="store_true")
+args = parser.parse_args()
+print(f"plan for {args.name}: {args.preset}, remote={args.remote}")
+if args.yes:
+    (pathlib.Path(args.parent) / args.name).mkdir()
+    print("Done")
+"""
+
+
+def test_a_new_project_can_be_made_from_the_dialog(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        (app.devkit / "scripts").mkdir(parents=True)
+        (app.devkit / "scripts" / "new-project.py").write_text(FAKE_NEW_PROJECT, "utf-8")
+        await window.click("#new-group")
+        await window.click("#scaffold-toggle")
+        presets = "[...document.querySelectorAll('#scaffold-preset option')].map(o => o.value)"
+        await window.wait(f"{presets}.length", "the presets")
+        assert await window.js(presets) == ["service", "bare"]
+
+        await window.js(
+            "(() => { const n = document.getElementById('scaffold-name');"
+            " n.value = 'fresh'; n.dispatchEvent(new Event('input')); })()"
+        )
+        await window.click("#scaffold-preview")
+        output = "document.getElementById('scaffold-output').textContent"
+        await window.wait(f"{output}.includes('plan for fresh')", "the plan")
+        assert not (app.projects / "fresh").exists()
+
+        await window.wait("!document.getElementById('scaffold-create').disabled", "the preview")
+        await window.click("#scaffold-create")
+        selected = "document.querySelector('.project.selected')?.textContent"
+        assert await window.wait(selected, "the project to be chosen") == "fresh"
+        assert (app.projects / "fresh").is_dir()
+
+    scenario(tmp_path, body)
+
+
 def test_deleting_a_project_says_what_is_unsaved_and_refuses_one_in_use(tmp_path):
     async def body(_app: App, window: Window) -> None:
         await open_tab(window, "alpha")

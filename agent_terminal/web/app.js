@@ -80,6 +80,8 @@ const dialog = new NewTabDialog({
   clone: (fullName) => send({ type: "clone_repo", full_name: fullName }),
   describeDeletion: (path) => send({ type: "describe_deletion", path }),
   deleteProject: (path) => send({ type: "delete_project", path }),
+  listPresets: () => send({ type: "list_presets" }),
+  newProject: (choice) => send({ type: "new_project", ...choice }),
 });
 
 const review = new ReviewPanel(document.getElementById("review"), {
@@ -155,6 +157,9 @@ const dialogMessages = {
   cloned: (message) => dialog.remote.setCloned(message),
   deletion: (message) => dialog.setDeletion(message),
   deleted: (message) => dialog.setDeleted(message),
+  presets: (message) => dialog.newProject.setPresets(message),
+  new_project_output: (message) => dialog.newProject.addLine(message.line),
+  new_project_done: (message) => dialog.newProject.setDone(message),
 };
 
 function onMessage(message) {

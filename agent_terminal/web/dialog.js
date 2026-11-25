@@ -5,12 +5,14 @@
 //
 // Without a fixed folder it also manages the projects root: a project can be deleted (to
 // the Recycle Bin, after a confirmation saying what only exists here), and any of the
-// user's GitHub repositories not yet in it can be cloned in.
+// user's GitHub repositories not yet in it can be cloned in, or a new project made from
+// devkit's templates.
 
 import { confirmAction } from "./confirm.js";
 import { icon } from "./icons.js";
 import { PastSessions } from "./past.js";
 import { RemoteRepos } from "./remote.js";
+import { NewProject } from "./scaffold.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
 const TYPING_PAUSE_MS = 250;
@@ -50,6 +52,11 @@ export class NewTabDialog {
       clone: requests.clone,
       cloned: (path) => this.onCloned(path),
       say: (text) => this.say(text),
+    });
+    this.newProject = new NewProject({
+      listPresets: requests.listPresets,
+      create: requests.newProject,
+      created: (path) => this.onCloned(path),
     });
     this.wire();
   }
@@ -100,6 +107,8 @@ export class NewTabDialog {
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
     this.say("");
     this.remote.show(false);
+    // A run under way stays in view: what it prints is still arriving.
+    if (!this.newProject.running) this.newProject.show(false);
     this.renderProjects();
     this.choose(fixed?.path ?? "");
     this.dialog.showModal();
@@ -165,7 +174,7 @@ export class NewTabDialog {
     if (this.requested === message.requested) this.choose("");
   }
 
-  // A finished clone is chosen, ready to start a session in.
+  // A finished clone, or a created project, is chosen, ready to start a session in.
   onCloned(path) {
     if (!this.dialog.open || this.projectField.hidden) return;
     this.pathInput.value = "";

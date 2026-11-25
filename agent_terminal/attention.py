@@ -2,8 +2,8 @@
 
 Claude Code and Codex both report their state with OSC 7501, a "program status"
 sequence: `ESC ] 7501 ; state=blocked:app=codex:kind=permission ST`. Codex sends it
-unprompted. Claude sends it only to a terminal that answers its `7501;?` query, which is
-why `QUERY_REPLY` exists: without the answer a Claude tab would report nothing.
+unprompted. Claude sends it only to a terminal that answers its `7501;?` query, which
+`pty_session.STATUS_REPLY` does: without the answer a Claude tab would report nothing.
 
 States seen from real sessions (Claude Code 2.1.318, Codex 0.166):
 
@@ -29,8 +29,6 @@ ESC = "\x1b"
 MAX_OSC = 4096
 
 PROGRAM_STATUS = "7501"
-QUERY = f"{PROGRAM_STATUS};?"
-QUERY_REPLY = f"{OSC_START}{QUERY}{ST}"
 
 STARTING = "starting"
 WORKING = "working"

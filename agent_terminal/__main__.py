@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import importlib
 import logging
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from agent_terminal.instance import WINDOW_TITLE, acquire_instance_lock, focus_r
 from agent_terminal.server import Backend
 from agent_terminal.settings import Settings
 from agent_terminal.taskbar import brand_window, claim_process_identity
+from agent_terminal.updates import app_checkout
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,12 @@ class FolderPicker:
         return str(chosen[0]) if chosen else None
 
 
+def close_window(picker: FolderPicker) -> None:
+    """Close the window as its X would, from any thread: `main` then stops the backend."""
+    if picker.window is not None:
+        picker.window.destroy()
+
+
 def run_window(url: str, picker: FolderPicker, busy: Callable[[], list[str] | None]) -> None:
     """Show the page, returning when the window closes; closing on a busy agent asks
     first. `webview` is imported here because it needs the Windows runtime the suite
@@ -91,8 +99,14 @@ def main() -> int:
         focus_running_window()
         return 0
     claim_process_identity()
+    settings.pid_file.write_text(str(os.getpid()), encoding="utf-8")
     picker = FolderPicker()
-    backend = Backend(settings, desktop=Desktop(pick_folder=picker))
+    backend = Backend(
+        settings,
+        desktop=Desktop(pick_folder=picker),
+        close_window=lambda: close_window(picker),
+        checkout=app_checkout(),
+    )
     try:
         backend.start()
         run_window(backend.url, picker, backend.busy_tabs)

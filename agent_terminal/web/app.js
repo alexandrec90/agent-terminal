@@ -1,3 +1,4 @@
+import { AppBar } from "./appbar.js";
 import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
@@ -15,6 +16,7 @@ let activeId = null;
 let folded = new Set();
 let hidden = new Set();
 let synced = false;
+let appStatus = null;
 // Mid-drag, a redraw would take the dragged row away: hold it until the drop.
 let dragging = false;
 let renderHeld = false;
@@ -90,8 +92,13 @@ const review = new ReviewPanel(document.getElementById("review"), {
   openUrl: (url) => send({ type: "open_url", url }),
 });
 
+const appBar = new AppBar(document.getElementById("app-bar"), {
+  restart: (choice) => send({ type: "app_restart", ...choice }),
+});
+
 const send = connect(onMessage, () => {
   send({ type: "hello", ...terminals.dimensions() });
+  send({ type: "app_status" });
 });
 const terminals = new Terminals(document.getElementById("terminals"), {
   send,
@@ -134,13 +141,29 @@ function applyState(state) {
   render();
 }
 
+const dialogMessages = {
+  projects: (message) => dialog.setProjects(message.projects),
+  folder: (message) => dialog.setFolder(message),
+  past_sessions: (message) => dialog.setPastSessions(message),
+  picked: (message) => dialog.setPicked(message.path),
+  remote_repos: (message) => dialog.remote.setRepos(message),
+  cloned: (message) => dialog.remote.setCloned(message),
+  deletion: (message) => dialog.setDeletion(message),
+  deleted: (message) => dialog.setDeleted(message),
+};
+
 function onMessage(message) {
+  if (Object.hasOwn(dialogMessages, message.type)) {
+    dialogMessages[message.type](message);
+    return;
+  }
   switch (message.type) {
     case "state":
       applyState(message);
       break;
     case "output":
-      terminals.write(message.id, message.data);
+      if (message.replay) terminals.replay(message.id, message.data);
+      else terminals.write(message.id, message.data);
       break;
     case "reset":
       terminals.reset(message.id);
@@ -148,35 +171,15 @@ function onMessage(message) {
     case "paste":
       terminals.paste(message.id, message.text);
       break;
-    case "projects":
-      dialog.setProjects(message.projects);
-      break;
-    case "folder":
-      dialog.setFolder(message);
-      break;
-    case "past_sessions":
-      dialog.setPastSessions(message);
-      break;
-    case "picked":
-      dialog.setPicked(message.path);
-      break;
-    case "remote_repos":
-      dialog.remote.setRepos(message);
-      break;
-    case "cloned":
-      dialog.remote.setCloned(message);
-      break;
-    case "deletion":
-      dialog.setDeletion(message);
-      break;
-    case "deleted":
-      dialog.setDeleted(message);
-      break;
     case "pr_detail":
       review.setDetail(message);
       break;
     case "pr_error":
       review.setError(message);
+      break;
+    case "app":
+      appStatus = message;
+      appBar.set(message);
       break;
     default:
       console.warn("unknown message", message);
@@ -192,6 +195,7 @@ window.__agentTerminal = {
   send,
   tabs: () => tabs,
   prs: () => prs,
+  app: () => appStatus,
 };
 
 setInterval(() => refreshTimes(groups), TIME_REFRESH_MS);

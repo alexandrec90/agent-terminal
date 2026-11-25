@@ -35,6 +35,23 @@ def test_files_live_in_the_data_dir(tmp_path):
     assert settings.state_file.parent == tmp_path
     assert settings.log_file.parent == tmp_path
     assert settings.lock_file.parent == tmp_path
+    for path in (
+        settings.pid_file,
+        settings.host_address_file,
+        settings.host_lock_file,
+        settings.host_log_file,
+        settings.update_result_file,
+        settings.update_log_file,
+    ):
+        assert path.parent == tmp_path
+    assert settings.host_lock_file != settings.lock_file
+
+
+def test_the_session_host_is_on_by_default(monkeypatch):
+    monkeypatch.delenv("AGENT_TERMINAL_SESSION_HOST", raising=False)
+    settings = Settings()
+    assert settings.session_host is True
+    assert settings.update_branch == "main"
 
 
 def test_data_dir_prefers_local_app_data(monkeypatch, tmp_path):

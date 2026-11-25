@@ -1,7 +1,7 @@
 """The running half of the tabs: one process per tab, and what it says about itself.
 
-Everything here runs on the server's event loop except `receive`, which runs on a tab's
-reader thread so a status query is answered before the agent stops waiting for it.
+Everything here runs on the server's event loop except `receive`, which may run on a
+tab's reader thread and hops onto the loop.
 """
 
 from __future__ import annotations
@@ -18,13 +18,16 @@ from typing import Any
 from agent_terminal import agents, attention, trust
 from agent_terminal.attention import OscScanner, Presence
 from agent_terminal.codex_sessions import CodexSessionFinder
-from agent_terminal.pty_session import Kill, PtySession, Spawn, SpawnError, kill_tree
+from agent_terminal.pty_session import SpawnError
+from agent_terminal.sessions import Session, SessionSource, Survivor
 from agent_terminal.settings import Settings
 from agent_terminal.store import Tab
 
 log = logging.getLogger(__name__)
 
 DECLINED_NOTE = "\r\nThis folder wasn't trusted, so no worktree was made.\r\n"
+# Between the two resizes of `redraw`: long enough that the process sees two changes.
+REDRAW_GAP_SECONDS = 0.15
 
 
 @dataclass
@@ -32,7 +35,7 @@ class LiveTab:
     """A tab's process, and the status that lasts only as long as it does."""
 
     tab: Tab
-    session: PtySession
+    session: Session
     scanner: OscScanner = field(default_factory=OscScanner)
     status: str = attention.STARTING
     started_at: float = field(default_factory=time.time)
@@ -42,6 +45,29 @@ class LiveTab:
     # Claude is running plain only to ask, and the tab's real start waits on the answer.
     worktree_after_trust: bool = False
     size: tuple[int, int] = (0, 0)
+
+
+def state_of(live: LiveTab) -> dict[str, Any]:
+    """What a later window needs to carry on with this tab's process."""
+    return {
+        "status": live.status,
+        "started_at": live.started_at,
+        "user_engaged": live.user_engaged,
+        "awaiting_trust": live.awaiting_trust,
+        "worktree_after_trust": live.worktree_after_trust,
+        "rows": live.size[0],
+        "cols": live.size[1],
+    }
+
+
+def restore_state(live: LiveTab, state: dict[str, Any]) -> None:
+    """Set a tab back to what `state_of` recorded. Anything missing keeps its default."""
+    live.status = str(state.get("status", attention.STARTING))
+    live.started_at = float(state.get("started_at", live.started_at))
+    live.user_engaged = bool(state.get("user_engaged", False))
+    live.awaiting_trust = bool(state.get("awaiting_trust", False))
+    live.worktree_after_trust = bool(state.get("worktree_after_trust", False))
+    live.size = (int(state.get("rows", 0)), int(state.get("cols", 0)))
 
 
 @dataclass(frozen=True)
@@ -55,6 +81,37 @@ class RunnerEvents:
     reset: Callable[[str], None]
 
 
+class ClaudeTreeFinder:
+    """Finds the worktree Claude named for itself, for a tab that asked for one."""
+
+    def __init__(
+        self, claude_home: Path, loop: asyncio.AbstractEventLoop, changed: Callable[[], None]
+    ) -> None:
+        self._claude_home = claude_home
+        self._loop = loop
+        self._changed = changed
+        self._finding: set[str] = set()
+
+    def look_for(self, tab: Tab) -> None:
+        """Start a search unless one is running. Claude writes its transcript on the
+        first message, so a tab not found now is looked for on its next status change."""
+        if tab.id in self._finding or not tab.session_id:
+            return
+        self._finding.add(tab.id)
+        self._loop.create_task(self.search(tab, tab.session_id))
+
+    async def search(self, tab: Tab, session_id: str) -> None:
+        """Record the worktree, once the session's transcript says where it is."""
+        find = agents.claude_session_tree
+        try:
+            tree = await self._loop.run_in_executor(None, find, self._claude_home, session_id)
+        finally:
+            self._finding.discard(tab.id)
+        if tree and not tab.cwd:
+            tab.cwd = tree
+            self._changed()
+
+
 class TabRunner:
     """Starts and stops processes, and turns their output into tab state."""
 
@@ -62,17 +119,15 @@ class TabRunner:
         self,
         settings: Settings,
         loop: asyncio.AbstractEventLoop,
-        spawn: Spawn,
+        sessions: SessionSource,
         events: RunnerEvents,
-        kill: Kill = kill_tree,
     ) -> None:
         self._settings = settings
         self._loop = loop
-        self._spawn = spawn
-        self._kill = kill
+        self._sessions = sessions
         self._events = events
         self.live: dict[str, LiveTab] = {}
-        self._finding_trees: set[str] = set()
+        self.trees = ClaudeTreeFinder(settings.claude_home, loop, events.changed)
         self._finder = CodexSessionFinder(
             settings.codex_home, loop, self._claimed_sessions, events.changed
         )
@@ -83,15 +138,48 @@ class TabRunner:
     def add(self, tab: Tab) -> LiveTab:
         """Prepare a tab, so it can be shown before its process is up."""
         holder: list[LiveTab] = []
-        session = PtySession(
-            on_output=lambda text: self.receive(holder[0], text),
-            on_exit=lambda code: self._to_loop(self._exited, holder[0], code),
-            spawn=self._spawn,
-            kill=self._kill,
+        session = self._sessions.new(
+            tab.id,
+            lambda text: self.receive(holder[0], text),
+            lambda code: self._to_loop(self._exited, holder[0], code),
         )
         holder.append(LiveTab(tab=tab, session=session))
         self.live[tab.id] = holder[0]
         return holder[0]
+
+    def adopt(self, tab: Tab, survivor: Survivor) -> LiveTab:
+        """Take on a process the last window left running. What it reported while no
+        window was reading is read now, so the tab is as it would have been."""
+        holder: list[LiveTab] = []
+        # Anything the process says from here on reaches the loop after this returns,
+        # by which time `holder` is filled.
+        session = self._sessions.adopt(
+            survivor,
+            lambda text: self.receive(holder[0], text),
+            lambda code: self._to_loop(self._exited, holder[0], code),
+        )
+        live = LiveTab(tab=tab, session=session)
+        holder.append(live)
+        restore_state(live, survivor.state)
+        for payload in live.scanner.feed(survivor.unread):
+            self._apply(live, payload)
+        self.live[tab.id] = live
+        return live
+
+    def redraw(self, tab_id: str) -> None:
+        """Have a process repaint its screen: a pseudo-console redraws on a resize, and a
+        rebuilt terminal holds only as much as the host kept."""
+        live = self.live.get(tab_id)
+        if live is None or live.size == (0, 0):
+            return
+        rows, cols = live.size
+        live.session.resize(rows, max(cols - 1, 1))
+        self._loop.call_later(REDRAW_GAP_SECONDS, live.session.resize, rows, cols)
+
+    def remember_all(self) -> None:
+        """Leave every tab's state with its process, before the window goes."""
+        for live in self.live.values():
+            live.session.remember(state_of(live))
 
     async def start(self, tab: Tab, size: tuple[int, int]) -> None:
         """Start the tab's process. A failure is shown in the tab rather than raised."""
@@ -174,10 +262,9 @@ class TabRunner:
             log.debug("event loop closed; dropped %s", callback)
 
     def receive(self, live: LiveTab, text: str) -> None:
-        """Take a chunk of output, on the reader thread."""
+        """Take a chunk of output, on the reader thread or the loop. The session has
+        already answered any status query in it."""
         payloads = live.scanner.feed(text)
-        if attention.QUERY in payloads:
-            live.session.write(attention.QUERY_REPLY)
         self._to_loop(self._deliver, live, text, payloads)
 
     def _deliver(self, live: LiveTab, text: str, payloads: list[str]) -> None:
@@ -185,6 +272,8 @@ class TabRunner:
             return
         self._events.output(live.tab.id, text)
         if any([self._apply(live, payload) for payload in payloads]):
+            # Kept with the process too, for a window that comes back without a goodbye.
+            live.session.remember(state_of(live))
             self._events.changed()
 
     def _apply(self, live: LiveTab, payload: str) -> bool:
@@ -203,7 +292,7 @@ class TabRunner:
             if tab.agent == agents.CODEX and not tab.session_id:
                 self._finder.look_for(tab, live.started_at)
             if tab.agent == agents.CLAUDE and tab.worktree and not tab.cwd:
-                self._look_for_claude_tree(tab)
+                self.trees.look_for(tab)
         title = attention.parse_title(payload)
         if title is not None:
             tab.title = attention.clean_title(title, tab.project) or tab.title
@@ -213,27 +302,6 @@ class TabRunner:
         if changed and live.user_engaged:
             tab.updated_at = time.time()
         return changed
-
-    def _look_for_claude_tree(self, tab: Tab) -> None:
-        """Start a search unless one is running. Claude writes its transcript on the
-        first message, so a tab not found now is looked for on its next status change."""
-        if tab.id in self._finding_trees or not tab.session_id:
-            return
-        self._finding_trees.add(tab.id)
-        self._loop.create_task(self.find_claude_tree(tab, tab.session_id))
-
-    async def find_claude_tree(self, tab: Tab, session_id: str) -> None:
-        """Record the worktree Claude named for itself, once its transcript says where."""
-        find = agents.claude_session_tree
-        try:
-            tree = await self._loop.run_in_executor(
-                None, find, self._settings.claude_home, session_id
-            )
-        finally:
-            self._finding_trees.discard(tab.id)
-        if tree and not tab.cwd:
-            tab.cwd = tree
-            self._events.changed()
 
     def _past_trust(self, live: LiveTab, state: str) -> None:
         """The agent's first state answers its trust screen: `clear` if it was declined,

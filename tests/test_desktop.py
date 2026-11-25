@@ -12,6 +12,7 @@ from agent_terminal.__main__ import (
     BACKGROUND,
     FolderPicker,
     claim_taskbar_identity,
+    close_window,
     run_window,
 )
 from agent_terminal.close_guard import DIALOG_TITLE
@@ -132,6 +133,18 @@ class TestFolderPicker:
         picker = FolderPicker()
         picker.window = FakeWindow(None)
         assert picker() is None
+
+
+class TestCloseWindow:
+    def test_nothing_to_close_before_there_is_a_window(self):
+        close_window(FolderPicker())
+
+    def test_destroys_the_window(self):
+        closed: list[bool] = []
+        picker = FolderPicker()
+        picker.window = type("W", (), {"destroy": lambda _self: closed.append(True)})()
+        close_window(picker)
+        assert closed == [True]
 
 
 class RecordedClosing:

@@ -10,6 +10,7 @@ import pytest
 from agent_terminal import server as server_module
 from agent_terminal.server import HOST, Backend, request_allowed
 from agent_terminal.settings import Settings
+from agent_terminal.updates import UpdateStatus
 
 
 @pytest.fixture
@@ -21,12 +22,78 @@ def backend(tmp_path: Path):
         claude_config_file=tmp_path / "claude.json",
         codex_home=tmp_path / "codex",
         gh_command=str(tmp_path / "no-gh"),
+        # No real session host: processes stay in the backend, as before there was one.
+        session_host=False,
     )
     (settings.projects_root / "demo").mkdir(parents=True)
     instance = Backend(settings)
     instance.start()
     yield instance
     instance.stop()
+
+
+class Restarts:
+    def __init__(self) -> None:
+        self.relaunched: list[tuple] = []
+        self.closed = 0
+
+    def relaunch(self, settings, checkout, update) -> int:
+        self.relaunched.append((checkout, update))
+        return 1
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def test_a_restart_starts_the_helper_then_closes_the_window(tmp_path):
+    restarts = Restarts()
+    settings = Settings(data_dir=tmp_path / "data", session_host=False)
+    backend = Backend(
+        settings, close_window=restarts.close, checkout=tmp_path, relaunch=restarts.relaunch
+    )
+    backend.request_restart(update=True, keep_sessions=True)
+    assert restarts.relaunched == [(tmp_path, True)]
+    assert restarts.closed == 1
+    # Without a host there is nothing to keep: the restart ends the processes.
+    assert backend._keep_sessions is False
+
+
+def test_an_app_without_a_checkout_cannot_restart_itself(tmp_path):
+    backend = Backend(Settings(data_dir=tmp_path, session_host=False), close_window=lambda: None)
+    with pytest.raises(ValueError, match="cannot restart"):
+        backend.request_restart(update=False, keep_sessions=True)
+
+
+def test_the_page_asks_for_a_restart(tmp_path):
+    restarts = Restarts()
+    settings = Settings(
+        projects_root=tmp_path / "projects",
+        data_dir=tmp_path / "data",
+        gh_command=str(tmp_path / "no-gh"),
+        session_host=False,
+    )
+    backend = Backend(
+        settings, close_window=restarts.close, checkout=tmp_path, relaunch=restarts.relaunch
+    )
+    backend._control._check = lambda *_: UpdateStatus()
+    backend.start()
+
+    async def body():
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(
+                socket_url(backend), headers={"Origin": origin_of(backend)}
+            ) as socket:
+                await socket.send_str(json.dumps({"type": "app_restart", "update": False}))
+                for _ in range(200):
+                    if restarts.closed:
+                        break
+                    await asyncio.sleep(0.01)
+
+    try:
+        asyncio.run(body())
+    finally:
+        backend.stop()
+    assert restarts.relaunched == [(tmp_path, False)]
 
 
 def test_a_slow_request_does_not_hold_up_the_messages_behind_it(backend):
@@ -72,6 +139,21 @@ def test_busy_tabs_are_asked_of_the_loop_from_another_thread(backend, monkeypatc
     monkeypatch.setattr(server_module.close_guard, "busy_tabs", busy)
     assert backend.busy_tabs() == ["demo: fixing"]
     assert seen == ["backend"]
+
+
+def test_a_restart_the_user_asked_for_is_not_asked_about_again(tmp_path, monkeypatch):
+    """Its close runs on the loop, so asking there would only time out, and the dialog
+    would say agents end when a restart keeps them."""
+    monkeypatch.setattr(server_module.close_guard, "busy_tabs", lambda _live: ["demo: fixing"])
+    asked: list[list[str] | None] = []
+    backend = Backend(
+        Settings(data_dir=tmp_path, session_host=False),
+        close_window=lambda: asked.append(backend.busy_tabs()),
+        checkout=tmp_path,
+        relaunch=Restarts().relaunch,
+    )
+    backend.request_restart(update=False, keep_sessions=True)
+    assert asked == [[]]
 
 
 def test_busy_tabs_is_none_when_the_loop_does_not_answer(backend, monkeypatch):

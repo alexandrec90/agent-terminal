@@ -105,9 +105,12 @@ export class Terminals {
     term.attachCustomKeyEventHandler(
       (event) => !newLineKey(event, term) && clipboardKey(event, term, this.copy),
     );
-    term.onData((data) => this.send({ type: "input", id, data }));
+    const entry = { term, host, shade: new PromptShade(term), replaying: false };
+    term.onData((data) => {
+      if (!entry.replaying) this.send({ type: "input", id, data });
+    });
     host.addEventListener("contextmenu", (event) => this.onContextMenu(event, id, term));
-    this.entries.set(id, { term, host, shade: new PromptShade(term) });
+    this.entries.set(id, entry);
   }
 
   copy = (term) => {
@@ -152,6 +155,18 @@ export class Terminals {
 
   write(id, data) {
     this.entries.get(id)?.term.write(data);
+  }
+
+  // Output a process wrote before this page existed, from the session host. The terminal
+  // answers any query in it as it parses, and the process asked those long ago: the
+  // answers would arrive as keystrokes, so they are dropped until the replay is parsed.
+  replay(id, data) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.replaying = true;
+    entry.term.write(data, () => {
+      entry.replaying = false;
+    });
   }
 
   // A tab's process was replaced, so its screen belongs to something that has gone.

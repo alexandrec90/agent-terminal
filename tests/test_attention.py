@@ -7,8 +7,6 @@ from agent_terminal.attention import (
     MAX_OSC,
     NEEDS_INPUT,
     NO_ATTENTION,
-    QUERY,
-    QUERY_REPLY,
     SHELL,
     STARTING,
     WORKING,
@@ -97,11 +95,6 @@ class TestParsing:
     )
     def test_title(self, payload, title):
         assert parse_title(payload) == title
-
-    def test_the_query_reply_is_what_claude_accepts(self):
-        # Claude takes any OSC 7501 reply whose data starts with "?".
-        assert QUERY_REPLY == f"\x1b]{QUERY}{ST}"
-        assert QUERY.split(";", 1)[1].startswith("?")
 
 
 class TestCleanTitle:

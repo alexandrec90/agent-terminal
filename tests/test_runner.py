@@ -3,9 +3,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent_terminal.attention import EXITED, QUERY_REPLY, WORKING
+from agent_terminal.attention import BLOCKED, EXITED, IDLE, NEEDS_INPUT, WORKING
 from agent_terminal.pty_session import PtyProcess, SpawnError
-from agent_terminal.runner import LiveTab, RunnerEvents, TabRunner
+from agent_terminal.runner import (
+    ClaudeTreeFinder,
+    LiveTab,
+    RunnerEvents,
+    TabRunner,
+    restore_state,
+    state_of,
+)
+from agent_terminal.sessions import LocalSessions, Survivor
 from agent_terminal.settings import Settings
 from agent_terminal.store import Tab
 
@@ -48,7 +56,7 @@ class Rig:
                 codex_home=tmp_path,
             ),
             loop,
-            self.spawn,
+            LocalSessions(self.spawn),
             RunnerEvents(
                 lambda tab_id, text: self.outputs.append((tab_id, text)),
                 lambda: self.changes.append(True),
@@ -78,13 +86,149 @@ def test_add_shows_a_tab_before_its_process_exists(tmp_path):
     run(tmp_path, body)
 
 
-def test_receive_answers_the_query_on_the_reader_thread(tmp_path):
+def test_receive_leaves_the_query_to_the_session(tmp_path):
     async def body(rig: Rig) -> None:
         live = rig.runner.add(make_tab(tmp_path))
         await rig.runner.start(live.tab, (24, 80))
         await asyncio.sleep(0)
         await asyncio.to_thread(rig.runner.receive, live, "\x1b]7501;?\x1b\\")
-        assert rig.process.written == [QUERY_REPLY]
+        assert rig.process.written == []
+
+    run(tmp_path, body)
+
+
+class Remembering:
+    """A session that only records what it is told."""
+
+    def __init__(self) -> None:
+        self.remembered: list[dict[str, Any]] = []
+        self.sizes: list[tuple[int, int]] = []
+
+    def start(self, *_: Any) -> None: ...
+    def write(self, text: str) -> None: ...
+    def close(self) -> None: ...
+
+    def resize(self, rows: int, cols: int) -> None:
+        self.sizes.append((rows, cols))
+
+    def remember(self, state: dict[str, Any]) -> None:
+        self.remembered.append(state)
+
+
+class Adopting(LocalSessions):
+    """Hands back `Remembering` sessions for survivors."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.adopted: list[Survivor] = []
+        self.session = Remembering()
+        self.callbacks: list[Any] = []
+
+    def adopt(self, survivor, on_output, on_exit):
+        self.adopted.append(survivor)
+        self.callbacks.append((on_output, on_exit))
+        return self.session
+
+
+def test_adopt_carries_on_from_what_was_remembered(tmp_path):
+    async def body(rig: Rig) -> None:
+        source = Adopting()
+        rig.runner._sessions = source
+        state = {"status": WORKING, "user_engaged": True, "started_at": 5.0, "rows": 20}
+        survivor = Survivor(
+            tab_id="t",
+            key="k",
+            alive=True,
+            state=state,
+            screen="old\x1b]7501;state=working\x1b\\new\x1b]7501;state=blocked\x1b\\",
+            unread="new\x1b]7501;state=blocked\x1b\\",
+        )
+        tab = make_tab(tmp_path)
+        live = rig.runner.adopt(tab, survivor)
+        assert rig.runner.live["t"] is live
+        assert live.session is source.session
+        assert live.started_at == 5.0
+        assert live.user_engaged is True
+        # Only what it had not read yet is read again: it was blocked while away.
+        assert live.status == BLOCKED
+        assert tab.attention == NEEDS_INPUT
+        assert source.adopted == [survivor]
+
+    run(tmp_path, body)
+
+
+def test_output_after_adoption_reaches_the_tab(tmp_path):
+    async def body(rig: Rig) -> None:
+        source = Adopting()
+        rig.runner._sessions = source
+        rig.runner.adopt(make_tab(tmp_path), Survivor(tab_id="t", key="k", alive=True))
+        on_output, on_exit = source.callbacks[0]
+        on_output("\x1b]7501;state=done\x1b\\")
+        await asyncio.sleep(0.01)
+        assert rig.outputs == [("t", "\x1b]7501;state=done\x1b\\")]
+        assert rig.runner.live["t"].status == IDLE
+        on_exit(1)
+        await asyncio.sleep(0.01)
+        assert rig.runner.live["t"].status == EXITED
+
+    run(tmp_path, body)
+
+
+def test_a_change_is_remembered_with_the_process(tmp_path):
+    async def body(rig: Rig) -> None:
+        source = Adopting()
+        rig.runner._sessions = source
+        live = rig.runner.adopt(make_tab(tmp_path), Survivor(tab_id="t", key="k", alive=True))
+        rig.runner.receive(live, "\x1b]7501;state=working\x1b\\")
+        await asyncio.sleep(0.01)
+        assert source.session.remembered[-1]["status"] == WORKING
+
+    run(tmp_path, body)
+
+
+def test_state_of_is_what_restore_reads(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.runner.add(make_tab(tmp_path))
+        live.status = WORKING
+        live.user_engaged = True
+        live.awaiting_trust = True
+        live.size = (30, 90)
+        state = state_of(live)
+        again = rig.runner.add(make_tab(tmp_path))
+        restore_state(again, state)
+        assert state_of(again) == state
+        restore_state(again, {})
+        assert again.status == "starting"
+        assert again.size == (0, 0)
+
+    run(tmp_path, body)
+
+
+def test_remember_all_tells_every_session(tmp_path):
+    async def body(rig: Rig) -> None:
+        source = Adopting()
+        rig.runner._sessions = source
+        rig.runner.adopt(make_tab(tmp_path), Survivor(tab_id="t", key="k", alive=True))
+        rig.runner.remember_all()
+        assert source.session.remembered[-1]["status"] == "starting"
+
+    run(tmp_path, body)
+
+
+def test_redraw_resizes_away_and_back(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent_terminal.runner.REDRAW_GAP_SECONDS", 0)
+
+    async def body(rig: Rig) -> None:
+        source = Adopting()
+        rig.runner._sessions = source
+        live = rig.runner.adopt(make_tab(tmp_path), Survivor(tab_id="t", key="k", alive=True))
+        rig.runner.redraw("t")
+        assert source.session.sizes == []  # no size known yet
+        live.size = (30, 100)
+        rig.runner.redraw("t")
+        rig.runner.redraw("gone")
+        await asyncio.sleep(0.01)
+        assert source.session.sizes == [(30, 99), (30, 100)]
 
     run(tmp_path, body)
 
@@ -156,7 +300,7 @@ def test_a_spawn_failure_reaches_the_tab(tmp_path):
         raise SpawnError("no such shell")
 
     async def body(rig: Rig) -> None:
-        rig.runner._spawn = refuse
+        rig.runner._sessions = LocalSessions(refuse)
         tab = make_tab(tmp_path)
         live = rig.runner.add(tab)
         await rig.runner.start(tab, (24, 80))
@@ -262,7 +406,8 @@ def test_a_tree_not_yet_written_is_looked_for_again(tmp_path):
     async def body(rig: Rig) -> None:
         live = rig.runner.add(claude_worktree_tab(tmp_path))
         rig.runner.receive(live, "\x1b]7501;state=working\x1b\\")
-        await settle(lambda: not rig.runner._finding_trees)
+        await settle(lambda: rig.runner.live["t"].status == "working")
+        await settle(lambda: not rig.runner.trees._finding)
         assert live.tab.cwd is None
         write_transcript(tmp_path, "s-1", "C:\\tree")
         rig.runner.receive(live, "\x1b]7501;state=idle\x1b\\")
@@ -291,20 +436,36 @@ def test_a_tab_with_a_known_folder_or_no_worktree_is_not_searched(tmp_path):
 def test_one_search_at_a_time_per_tab(tmp_path):
     async def body(rig: Rig) -> None:
         tab = claude_worktree_tab(tmp_path)
-        rig.runner._finding_trees.add(tab.id)
-        rig.runner._look_for_claude_tree(tab)
+        rig.runner.trees._finding.add(tab.id)
+        rig.runner.trees.look_for(tab)
         await asyncio.sleep(0.01)
-        assert rig.runner._finding_trees == {tab.id}  # the running search still owns it
+        assert rig.runner.trees._finding == {tab.id}  # the running search still owns it
 
     run(tmp_path, body)
+
+
+def test_a_search_records_the_tree_and_reports_the_change(tmp_path):
+    async def body() -> None:
+        changes: list[bool] = []
+        tab = claude_worktree_tab(tmp_path)
+        finder = ClaudeTreeFinder(
+            tmp_path, asyncio.get_running_loop(), lambda: changes.append(True)
+        )
+        await finder.search(tab, "s-1")
+        assert (tab.cwd, changes) == (None, [])
+        write_transcript(tmp_path, "s-1", "C:\\tree")
+        await finder.search(tab, "s-1")
+        assert (tab.cwd, changes) == ("C:\\tree", [True])
+
+    asyncio.run(body())
 
 
 def test_a_tab_without_a_session_is_not_searched(tmp_path):
     async def body(rig: Rig) -> None:
         tab = make_tab(tmp_path)
         tab.worktree = True
-        rig.runner._look_for_claude_tree(tab)
-        assert rig.runner._finding_trees == set()
+        rig.runner.trees.look_for(tab)
+        assert rig.runner.trees._finding == set()
 
     run(tmp_path, body)
 

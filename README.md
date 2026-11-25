@@ -43,6 +43,28 @@ Closing the window ends the agents and keeps the tabs: the next launch resumes e
 session, with its worktree, grey state and selected tab. **×** forgets a tab for good. It
 does not remove a worktree the session created, since that may hold work.
 
+### Updating without stopping the agents
+
+Each tab's process lives in a **session host**, a small background process the app starts
+(`agent_terminal/host.py`), not in the window. A pseudo-console ends with the process
+that made it, so this is what lets the window go away and come back while an agent is
+mid-turn. The host keeps each tab's recent output (about two million characters), and
+the window that comes back rebuilds each tab's screen from it.
+
+| The bar above the groups says | Do |
+| --- | --- |
+| `Update available: 3 commits.` | **Update**: `git pull --ff-only` and `uv sync`, then the window restarts. Agents carry on |
+| the update is blocked, and why | Nothing to click: the checkout is on another branch, has local commits, or is dirty |
+| `Updated: abc123 → def456` | The last update worked |
+| `Update failed at …` | It names the step; the full output is in `update.log` in the data directory |
+| `Running sessions use the previous session host.` | The update changed the host itself. **Restart sessions** (two clicks) ends every agent and resumes each one |
+
+The app checks `origin/main` at start and every half hour, from the checkout it runs
+from. Closing the window still ends everything, host included. If the window crashes,
+the host keeps the agents for an hour (`AGENT_TERMINAL_HOST_ORPHAN_SECONDS`) for the next
+launch to take back. If the host cannot start, the app runs the agents itself as it did
+before, and a restart ends them.
+
 ### Starting somewhere new
 
 The dialog says what will happen before you press Start. In a folder an agent has not
@@ -108,6 +130,12 @@ agent_terminal/              the app
   agents.py                  how each agent is launched and resumed
   codex_sessions.py          finding a Codex tab's session on disk
   runner.py                  a tab's process; pty_session.py is the pseudo-console
+  sessions.py                where a tab's process lives: here, or in the session host
+  host.py                    the session host, which outlives the window
+  host_client.py             the app's side of it; host_protocol.py is the wire format
+  updates.py                 checking for an update, and the restart the page asks for
+  relaunch.py                the helper that updates the checkout and starts the app again
+  detached.py                starting a process that outlives the app
   manager.py                 the tabs, and every change the page can ask for
   desktop.py                 what the page asks of the machine outside its tabs
   folders.py                 scoping a tab to any folder

@@ -18,6 +18,7 @@ from typing import Any
 
 import aiohttp
 
+from agent_terminal.host_protocol import read_address
 from agent_terminal.instance import WINDOW_TITLE
 from agent_terminal.pty_session import kill_tree
 
@@ -213,6 +214,8 @@ class App:
         self.port = free_port()
         self.real_agents = real_agents
         self.process: subprocess.Popen[bytes] | None = None
+        # The app a restart started: no child of `process`, so tracked by its pid.
+        self.followed: int | None = None
         self.session: aiohttp.ClientSession | None = None
         self.window: Window | None = None
 
@@ -241,10 +244,10 @@ class App:
     def command() -> list[str]:
         return [sys.executable, "-m", "agent_terminal"]
 
-    def _page_url(self) -> str:
+    def _page_url(self, watch_process: bool = True) -> str:
         deadline = time.monotonic() + WAIT_SECONDS
         while time.monotonic() < deadline:
-            if self.process is not None and self.process.poll() is not None:
+            if watch_process and self.process is not None and self.process.poll() is not None:
                 raise AssertionError(f"app exited with {self.process.returncode}")
             try:
                 url = f"http://127.0.0.1:{self.port}/json"
@@ -264,13 +267,69 @@ class App:
         self.process = subprocess.Popen(self.command(), cwd=ROOT, env=self.env())
         return self._page_url()
 
-    async def start(self) -> Window:
-        debugger = await asyncio.to_thread(self._launch)
+    async def _attach(self, debugger: str) -> Window:
         self.session = aiohttp.ClientSession()
         ws = await self.session.ws_connect(debugger, max_msg_size=64 * 1024 * 1024)
         self.window = Window(ws)
         await self.window.wait("window.__agentTerminal?.ready()", "the page to connect")
         return self.window
+
+    async def start(self) -> Window:
+        return await self._attach(await asyncio.to_thread(self._launch))
+
+    @property
+    def pid_file(self) -> Path:
+        return self.base / "data" / "agent-terminal.pid"
+
+    def app_pid(self) -> int | None:
+        """The running app's own pid, as it records it: below any venv launcher."""
+        try:
+            return int(self.pid_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _restarted(self, before: int | None) -> str:
+        """Wait for the app the restart helper started, and its page."""
+        assert self.process is not None
+        code = self.process.wait(WAIT_SECONDS)
+        assert code == 0, f"the app exited {code} for its restart"
+        deadline = time.monotonic() + WAIT_SECONDS * 2
+        while time.monotonic() < deadline:
+            pid = self.app_pid()
+            if pid is not None and pid != before:
+                self.followed = pid
+                return self._page_url(watch_process=False)
+            time.sleep(0.2)
+        raise AssertionError("no app came back after the restart")
+
+    async def follow_restart(self, before: int | None) -> Window:
+        """After the page asked for a restart: the window that comes back."""
+        await self.dispose()
+        return await self._attach(await asyncio.to_thread(self._restarted, before))
+
+    async def close_followed_window(self) -> None:
+        """Close the window of the app a restart started, and wait for that app to end."""
+        assert self.followed is not None
+        await asyncio.to_thread(self._post_close, self.followed)
+        await self.dispose()
+        deadline = time.monotonic() + WAIT_SECONDS
+        while time.monotonic() < deadline:
+            if not await asyncio.to_thread(self.running, self.followed):
+                return
+            await asyncio.sleep(0.2)
+        raise AssertionError("the restarted app did not exit")
+
+    @staticmethod
+    def running(pid: int) -> bool:
+        check = f"[bool](Get-Process -Id {pid} -ErrorAction Ignore)"
+        found = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", check],  # noqa: S607 - pwsh from PATH, as the app runs it
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        return found.stdout.strip() == "True"
 
     @staticmethod
     def _process_tree(pid: int) -> set[int]:
@@ -330,7 +389,17 @@ class App:
             await self.session.close()
             self.session = None
 
+    def host_pid(self) -> int | None:
+        """The session host's pid while it publishes its address."""
+        address = read_address(self.base / "data" / "host.json")
+        return address.pid if address is not None else None
+
     def kill(self) -> None:
-        """End the app and everything under it; killing the launcher alone orphans it."""
+        """End the app and everything under it; killing the launcher alone orphans it.
+        The session host and an app a restart started are under nothing of the test's,
+        so each is ended by its own pid."""
         if self.process is not None and self.process.poll() is None:
             kill_tree(self.process.pid)
+        for pid in (self.followed, self.host_pid()):
+            if pid is not None:
+                kill_tree(pid)

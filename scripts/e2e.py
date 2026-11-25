@@ -18,7 +18,8 @@ reported as a pass.
 **Test ids on the command line run those alone, still inside the tier**, which is how a
 fixer reproduces one `FAILED` line.
 
-pytest runs under the checkout's `.venv` where it has one, and this script stays
+pytest runs under the checkout's `.venv` where it has one, else through `uv run` with
+the `dev` extras (`runner_argv`), and this script stays
 stdlib-only so the machine's Python can start it. `logs/e2e-junit.xml` is the artifact,
 overwritten per run, on failure too.
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -42,6 +44,8 @@ ENV_FLAG = "DEVKIT_E2E"
 MARKER = "local"
 JUNIT = Path("logs") / "e2e-junit.xml"
 VENV_INTERPRETERS = (Path(".venv") / "Scripts" / "python.exe", Path(".venv") / "bin" / "python")
+# uv's switch for "run in the environment as it stands".
+NO_SYNC = "UV_NO_SYNC"
 # The nightly job runs with nobody at the keyboard, and a console window opening under
 # someone's cursor is worse than a run a night late.
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -137,9 +141,39 @@ def verdict(code: int, found: list[Case], strict: bool) -> tuple[int, list[str]]
     return code, lines
 
 
-def pytest_argv(python: str, report: Path, named: Sequence[str] = ()) -> list[str]:
+def runner_argv(root: Path, fallback: str) -> list[str]:
+    """What starts pytest: `root`'s own `.venv` interpreter, else `uv run` building one.
+
+    The machine's Python has no pytest, so in a tree with no `.venv` -- an agent's
+    worktree before anything provisioned it -- the run ended `No module named pytest`,
+    `--help` included (devkit ledger e16cd1cb). `--frozen` keeps the lock as committed;
+    `--all-extras --all-groups` because pytest lives in `dev`, which a bare `uv run`
+    leaves out. `fallback` is used only where `uv` is not on PATH either.
+    """
+    python = interpreter(root, "")
+    if python:
+        return [python]
+    if shutil.which("uv") is None:
+        return [fallback]
+    return ["uv", "run", "--frozen", "--all-extras", "--all-groups", "python"]
+
+
+def run_env(env: Mapping[str, str], root: Path) -> dict[str, str]:
+    """The environment pytest runs in: `UV_NO_SYNC` dropped where `root` has no `.venv`.
+
+    A devkit session carries it so `uv run` leaves a borrowed `.venv` alone; in a tree
+    with none, `uv run` would make an empty one and install nothing into it. A tree that
+    has a `.venv` keeps it."""
+    out = dict(env)
+    if not (root / ".venv").exists():
+        out.pop(NO_SYNC, None)
+    return out
+
+
+def pytest_argv(python: str | Sequence[str], report: Path, named: Sequence[str] = ()) -> list[str]:
+    start = [python] if isinstance(python, str) else list(python)
     return [
-        python,
+        *start,
         "-m",
         "pytest",
         *(named or ["tests"]),
@@ -157,13 +191,14 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     report = REPO_ROOT / JUNIT
     report.parent.mkdir(parents=True, exist_ok=True)
     report.unlink(missing_ok=True)
-    python = interpreter(REPO_ROOT, sys.executable)
+    python = runner_argv(REPO_ROOT, sys.executable)
     # Captured and re-printed rather than inherited: a `NO_WINDOW` child writes to the
     # hidden console it was given, not to the pipe the pass reads. Passed on as bytes, so
     # no character pytest printed can raise on the way through a narrower stdout encoding.
     done = run(
         pytest_argv(python, report, named),
         cwd=REPO_ROOT,
+        env=run_env(os.environ, REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         creationflags=NO_WINDOW,

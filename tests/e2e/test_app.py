@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from driver import GIT_IDENTITY, App, Window
+from fake_agent import PROMPT
 
 from agent_terminal import clipboard
 
@@ -220,6 +221,10 @@ def test_a_tab_shows_when_its_agent_needs_the_user(tmp_path):
         assert await window.js(f"{style}.animationName") == "none", "a finished tab must not blink"
         assert await window.js(f"{style}.color") != asked_color, "the two must look different"
 
+        # Looked at, a finished turn has been read: the blue goes.
+        await window.js(f"document.querySelector('[data-id=\"{waiting}\"]').click()")
+        await window.wait_class(waiting, lacks("attention"), "cleared by viewing it")
+
     scenario(tmp_path, body)
 
 
@@ -268,6 +273,43 @@ def test_groups_follow_their_sessions(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_tabs_and_groups_are_reordered_by_dragging(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        first = await open_tab(window, "alpha")
+        second = await open_tab(window, "alpha")
+        other = await open_tab(window, "beta")
+        groups = "[...document.querySelectorAll('.group')].map(g => g.dataset.project)"
+        alpha_tabs = "[...document.querySelectorAll('[data-project=\"alpha\"] .tab')]"
+        order = f"{alpha_tabs}.map(t => t.dataset.id)"
+        assert await window.js(order) == [first, second]
+
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]')
+        await window.wait(f"{order}[0] === {json.dumps(second)}", "the tab dragged up")
+        await window.drag(f'[data-id="{second}"]', f'[data-id="{first}"]', below=True)
+        await window.wait(f"{order}[0] === {json.dumps(first)}", "the tab dragged back down")
+
+        # Out of its group it will not go: the drop is refused and nothing moves.
+        await window.drag(f'[data-id="{first}"]', f'[data-id="{other}"]')
+        await asyncio.sleep(0.5)
+        assert await window.js(order) == [first, second]
+        assert await window.js(
+            f"{json.dumps(first)} === document.querySelector("
+            "'[data-project=\"alpha\"] .tab').dataset.id"
+        )
+
+        await window.drag('[data-project="beta"] .group-head', '[data-project="alpha"]')
+        await window.wait(f"{groups}[0] === 'beta'", "the group dragged up")
+        assert await window.js(groups) == ["beta", "alpha"]
+        assert (
+            await window.js(
+                "document.querySelectorAll('.dragging, .drop-before, .drop-after').length"
+            )
+            == 0
+        )
+
+    scenario(tmp_path, body)
+
+
 def test_a_group_folds_to_its_heading_and_back(tmp_path):
     async def body(_app: App, window: Window) -> None:
         await open_tab(window, "alpha")
@@ -288,6 +330,35 @@ def test_a_group_folds_to_its_heading_and_back(tmp_path):
         await window.click('[data-project="alpha"] .group-head')
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 1", "the group to unfold")
+
+    scenario(tmp_path, body)
+
+
+def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        label = f"document.querySelector('[data-id=\"{tab}\"] .tab-time')"
+        assert await window.js(f"{label}.textContent") == "just now"
+        await window.type_into(tab, "finish\r")
+        await window.wait_class(tab, has("finished"), "a turn finished")
+        assert await window.js(f"{label}.textContent") == "just now"
+
+        cases = {
+            "30": "just now",
+            "90": "1 minute ago",
+            str(5 * 3600): "5 hours ago",
+            str(86400): "1 day ago",
+            str(7 * 86400): "1 week ago",
+            str(15 * 86400): "2 weeks ago",
+            str(60 * 86400): "2 months ago",
+            str(400 * 86400): "1 year ago",
+            "-5": "just now",
+        }
+        labels = await window.js(
+            "import('./sidebar.js').then(m => "
+            f"{json.dumps(list(cases))}.map(s => m.timeAgo(1000, 1000 + Number(s))))"
+        )
+        assert labels == list(cases.values())
 
     scenario(tmp_path, body)
 
@@ -648,6 +719,47 @@ def test_a_prs_prompt_can_be_reopened_from_its_worktree(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_a_groups_plus_offers_its_unopened_sessions_with_their_state(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        alpha = tmp_path / "projects" / "alpha"
+        tree = alpha / ".claude" / "worktrees" / "earlier"
+        git(alpha, "worktree", "add", str(tree), "-b", "worktree-earlier")
+        encoded = "".join(c if c.isalnum() else "-" for c in str(tree))
+        transcript = tmp_path / "claude-home" / "projects" / encoded / "earlier-session.jsonl"
+        transcript.parent.mkdir(parents=True)
+        title = {"type": "ai-title", "aiTitle": "Earlier <b>work</b>", "sessionId": "x"}
+        transcript.write_text(json.dumps(title) + "\n", encoding="utf-8")
+        (tree / "logs").mkdir()
+        (tree / "logs" / "ship-intent.md").write_text("Ship it\n", encoding="utf-8")
+        write_prs(app, make_pr(12, "worktree-earlier"))
+        first = await open_tab(window, "alpha")
+        await window.wait("window.__agentTerminal.tabs()[0].session_id !== null", "an id")
+
+        await window.click('[data-project="alpha"] .group-add')
+        row = "document.querySelector('.past-session[data-session=\"earlier-session\"]')"
+        await window.wait(f"{row}?.textContent?.includes('PR #12')", "the session and its PR")
+        # The title is text, never markup; the state reads intent, then PR.
+        assert await window.js(f"{row}.querySelector('.tab-title').textContent") == (
+            "Earlier <b>work</b>"
+        )
+        chips = f"[...{row}.querySelectorAll('.tab-chip')].map(c => c.textContent)"
+        assert await window.js(chips) == ["ship queued", "PR #12"]
+        # The tab already open is not offered.
+        own = (await window.tabs())[0]["session_id"]
+        assert await window.js(f"!!document.querySelector('[data-session=\"{own}\"]')") is False
+
+        await window.js(f"{row}.click()")
+        await window.wait("window.__agentTerminal.tabs().length === 2", "the resumed tab")
+        await window.wait("!document.getElementById('new-tab').open", "the dialog to close")
+        await wait_launches(app, 2)
+        launch = launches(app)[-1]
+        assert launch["argv"] == ["--resume", "earlier-session"]
+        assert Path(launch["cwd"]) == tree
+        assert first in {tab["id"] for tab in await window.tabs()}
+
+    scenario(tmp_path, body)
+
+
 def test_closing_the_window_brings_every_tab_back(tmp_path):
     async def run() -> None:
         make_projects(tmp_path)
@@ -706,6 +818,20 @@ def test_right_click_in_a_terminal_pastes(tmp_path):
             await window.wait_class(tab, has("attention"), "the pasted command to run")
         finally:
             clipboard.write_text(saved)
+
+    scenario(tmp_path, body)
+
+
+def test_the_prompt_between_claudes_rules_is_shaded(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab = await open_tab(window, "alpha")
+        shade = f"window.__agentTerminal.promptShade({json.dumps(tab)})"
+        assert await window.js(shade) is None, "nothing is boxed in before the prompt is drawn"
+        await window.type_into(tab, "compose\r")
+        rows = await window.wait(shade, "the prompt to be shaded")
+        assert rows["start"] == rows["end"], "only the prompt line lies between the rules"
+        screen = (await window.js(f"window.__agentTerminal.screen({json.dumps(tab)})")).split("\n")
+        assert screen[rows["start"]].startswith(PROMPT), screen
 
     scenario(tmp_path, body)
 

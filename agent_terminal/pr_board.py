@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -95,17 +95,18 @@ class PrBoard:
     def tab_fields(self, tab: Tab) -> dict[str, Any]:
         """A tab's place in the shipping process, for the state message."""
         facts = self._facts.get(tab.id, TabFacts())
-        found = self._pr_of(facts)
+        found = self.pr_for(facts.repository, facts.branch)
         pr = {**found.to_dict(), "repo": str(facts.repository)} if found else None
         return {"ship": facts.ship, "branch": facts.branch, "pr": pr}
 
-    def _pr_of(self, facts: TabFacts) -> PullRequest | None:
-        if facts.repository is None or facts.branch is None:
+    def pr_for(self, repository: Path | None, branch: str | None) -> PullRequest | None:
+        """The PR `branch` heads, as last known: open first, else merged or closed."""
+        if repository is None or branch is None:
             return None
-        for pr in self._open.get(facts.repository, ()):
-            if pr.head == facts.branch:
+        for pr in self._open.get(repository, ()):
+            if pr.head == branch:
                 return pr
-        return self._by_branch.get((facts.repository, facts.branch))
+        return self._by_branch.get((repository, branch))
 
     def plain_prs(self) -> list[dict[str, Any]]:
         """Open PRs no tab holds. A session that has its PR shows it on the tab instead."""
@@ -164,7 +165,9 @@ class PrBoard:
             return
         known = set(self._facts.values())
         self._facts = facts
-        await self._look_up_branches(found for found in facts.values() if found not in known)
+        await self.look_up_branches(
+            (found.repository, found.branch) for found in facts.values() if found not in known
+        )
         self._links.changed()
 
     async def refresh(self, repository: Path | None = None) -> None:
@@ -179,7 +182,7 @@ class PrBoard:
                 await self._refresh_repository(target)
 
         await asyncio.gather(*(one(target) for target in targets))
-        await self._look_up_branches(self._facts.values())
+        await self.look_up_branches((f.repository, f.branch) for f in self._facts.values())
         self._links.changed()
 
     async def _all_repositories(self) -> list[Path]:
@@ -207,10 +210,10 @@ class PrBoard:
                 found[(repository, pr.number)] = OpenPrompt(tree, prompt)
         return found
 
-    async def _look_up_branches(self, facts: Any) -> None:
-        """Find the PR of each branch that heads no open one: merged, closed, or none. A
-        merged PR stays merged, so it is asked about once."""
-        wanted = {(f.repository, f.branch) for f in facts if f.repository and f.branch}
+    async def look_up_branches(self, pairs: Iterable[tuple[Path | None, str | None]]) -> None:
+        """Find the PR of each `(repository, branch)` that heads no open one: merged,
+        closed, or none. A merged PR stays merged, so it is asked about once."""
+        wanted = {(repository, branch) for repository, branch in pairs if repository and branch}
         for repository, branch in wanted:
             if branch in TRUNK_BRANCHES or self._pr_is_settled(repository, branch):
                 continue

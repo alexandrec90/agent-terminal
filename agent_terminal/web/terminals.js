@@ -1,6 +1,8 @@
 // One xterm per tab, stacked in the same place so each stays laid out while hidden and
 // keeps parsing output. Every terminal is the same size, so the backend tracks just one.
 
+import { PromptShade } from "./prompt-shade.js";
+
 const { Terminal } = window;
 const { FitAddon } = window.FitAddon;
 const { WebglAddon } = window.WebglAddon;
@@ -105,7 +107,7 @@ export class Terminals {
     );
     term.onData((data) => this.send({ type: "input", id, data }));
     host.addEventListener("contextmenu", (event) => this.onContextMenu(event, id, term));
-    this.entries.set(id, { term, host });
+    this.entries.set(id, { term, host, shade: new PromptShade(term) });
   }
 
   copy = (term) => {
@@ -142,6 +144,7 @@ export class Terminals {
       this.dropWebgl();
       this.activeId = null;
     }
+    entry.shade.dispose();
     entry.term.dispose();
     entry.host.remove();
     this.entries.delete(id);
@@ -207,5 +210,10 @@ export class Terminals {
       lines.push(buffer.getLine(row)?.translateToString(true) ?? "");
     }
     return lines.join("\n");
+  }
+
+  // The viewport rows painted as the agent's prompt, or null.
+  promptShade(id) {
+    return this.entries.get(id)?.shade.shaded() ?? null;
   }
 }

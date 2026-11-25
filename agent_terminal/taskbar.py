@@ -104,11 +104,12 @@ class _Com:
                 ("rest", ctypes.c_void_p),
             ]
 
-        self.ctypes = ctypes
+        # `Any`: typeshed has no `windll` off Windows, and the gate type-checks on Linux.
+        self.ctypes: Any = ctypes
         self.Guid = Guid
         self.PropertyKey = PropertyKey
         self.PropVariant = PropVariant
-        self.ole32 = ctypes.windll.ole32
+        self.ole32 = self.ctypes.windll.ole32
 
     def guid(self, text: str) -> Any:
         value = self.Guid()

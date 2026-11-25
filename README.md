@@ -26,6 +26,7 @@ Starting it a second time brings the running window forward.
 | Leave a tab for later | Right-click it. It greys out; right-click again to undo |
 | Close a session | **×** on the tab |
 | Fold a group | Click its heading; folded, it shows a count, amber or blue if a session wants you |
+| Resize the sidebar | Drag its edge; double-click the edge to reset. The width is kept between launches |
 | Close a group | **×** on its heading (on hover): closes every session in it after asking, and hides its PRs until a session opens there |
 | Clone a repository | **+ New group** → **Clone one of your GitHub repositories…**: lists yours not yet in the projects root |
 | Delete a project | The bin beside it in **+ New group**. It goes to the Recycle Bin, after a warning naming anything not pushed; one with a tab open is refused |

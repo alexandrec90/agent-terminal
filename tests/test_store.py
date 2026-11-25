@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 
 from agent_terminal.store import (
+    MIN_SIDEBAR_WIDTH,
     SCHEMA_VERSION,
     DebouncedSaver,
     Snapshot,
     Tab,
     clean_group_order,
+    clean_sidebar_width,
     load_snapshot,
     parse_snapshot,
     paths_of,
@@ -113,6 +115,33 @@ def test_odd_group_lists_cost_the_groups_not_the_tabs():
 )
 def test_paths_of(saved, read):
     assert paths_of(saved) == read
+
+
+def test_the_sidebar_width_round_trips(tmp_path):
+    path = tmp_path / "state.json"
+    save_snapshot(path, Snapshot(sidebar_width=400))
+    assert load_snapshot(path) == Snapshot(sidebar_width=400)
+
+
+def test_a_file_from_before_the_sidebar_width_has_none():
+    text = json.dumps({"version": SCHEMA_VERSION, "tabs": []})
+    assert parse_snapshot(text).sidebar_width is None
+
+
+@pytest.mark.parametrize(
+    ("saved", "read"),
+    [
+        (400, 400),
+        (MIN_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH),
+        (-5, MIN_SIDEBAR_WIDTH),
+        (None, None),
+        ("400", None),
+        (400.5, None),
+        (True, None),
+    ],
+)
+def test_clean_sidebar_width(saved, read):
+    assert clean_sidebar_width(saved) == read
 
 
 def test_a_key_from_another_version_is_ignored():

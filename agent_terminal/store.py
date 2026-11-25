@@ -15,6 +15,8 @@ log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 SAVE_DELAY_SECONDS = 0.5
+# As the page's own limit. It keeps to its window's width too, which is not known here.
+MIN_SIDEBAR_WIDTH = 180
 
 
 @dataclass
@@ -57,6 +59,8 @@ class Snapshot:
     # held only PRs, which stay out of the sidebar until a session opens there.
     folded: list[str] = field(default_factory=list)
     hidden: list[str] = field(default_factory=list)
+    # In CSS pixels; None until the user drags it, for the page's default.
+    sidebar_width: int | None = None
 
 
 def paths_of(value: object) -> list[str]:
@@ -65,6 +69,14 @@ def paths_of(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def clean_sidebar_width(value: object) -> int | None:
+    """`value` as a sidebar width, never too narrow to use. None for anything but a whole
+    number, which a file from before it was kept also gives."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return max(value, MIN_SIDEBAR_WIDTH)
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -99,6 +111,7 @@ def parse_snapshot(text: str) -> Snapshot:
         group_order=clean_group_order(data.get("group_order")),
         folded=paths_of(data.get("folded")),
         hidden=paths_of(data.get("hidden")),
+        sidebar_width=clean_sidebar_width(data.get("sidebar_width")),
     )
 
 
@@ -135,6 +148,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
         "folded": snapshot.folded,
         "hidden": snapshot.hidden,
+        "sidebar_width": snapshot.sidebar_width,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

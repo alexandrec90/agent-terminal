@@ -107,6 +107,29 @@ class Window:
             "})()"
         )
 
+    async def drag_by(self, selector: str, dx: int) -> None:
+        """Press on an element and drag it sideways with the real mouse."""
+        box = await self.js(
+            f"document.querySelector({json.dumps(selector)}).getBoundingClientRect().toJSON()"
+        )
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        for kind, at, buttons in (
+            ("mouseMoved", x, 0),
+            ("mousePressed", x, 1),
+            ("mouseMoved", x + dx, 1),
+            ("mouseReleased", x + dx, 0),
+        ):
+            button = "none" if kind == "mouseMoved" and not buttons else "left"
+            await self._call(
+                "Input.dispatchMouseEvent",
+                type=kind,
+                x=at,
+                y=y,
+                button=button,
+                buttons=buttons,
+                clickCount=0 if kind == "mouseMoved" else 1,
+            )
+
     async def screenshot(self, path: Path) -> None:
         shot = await self._call("Page.captureScreenshot", format="png")
         await asyncio.to_thread(path.write_bytes, base64.b64decode(shot["data"]))

@@ -782,8 +782,12 @@ def test_a_groups_plus_offers_its_unopened_sessions_with_their_state(tmp_path):
         await window.wait("window.__agentTerminal.tabs()[0].session_id !== null", "an id")
 
         await window.click('[data-project="alpha"] .group-add')
+        start = "document.getElementById('new-tab-start').getBoundingClientRect().top"
+        start_while_loading = await window.js(start)
         row = "document.querySelector('.past-session[data-session=\"earlier-session\"]')"
         await window.wait(f"{row}?.textContent?.includes('PR #12')", "the session and its PR")
+        # The sessions arriving must not move Start out from under the pointer.
+        assert await window.js(start) == start_while_loading
         # The title is text, never markup; the state reads intent, then PR.
         assert await window.js(f"{row}.querySelector('.tab-title').textContent") == (
             "Earlier <b>work</b>"

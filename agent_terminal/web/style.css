@@ -953,13 +953,36 @@ legend {
   outline: 2px solid var(--accent);
 }
 
-/* A group's sessions no tab has open. */
+/* A group's sessions no tab has open. A fixed height, not a maximum: the list arrives after
+   the dialog opens, and a box that grew then would move Start out from under the pointer. */
 #resume-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 34vh;
+  height: min(34vh, 240px);
   overflow-y: auto;
+}
+
+#resume-list .past-session {
+  flex-shrink: 0;
+}
+
+.past-loading {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+.past-loading .icon {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .past-loading .icon {
+    animation: none;
+  }
 }
 
 .past-session {

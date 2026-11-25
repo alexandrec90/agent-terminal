@@ -234,7 +234,7 @@ function tabMeta(tab) {
   return parts.join(" · ");
 }
 
-function span(className, text) {
+export function span(className, text) {
   const element = document.createElement("span");
   element.className = className;
   element.textContent = text;
@@ -243,7 +243,7 @@ function span(className, text) {
 
 // The icon says where the PR stands; the text says which PR, and names any state the
 // icon alone would leave a guess.
-function prChipFace(pr) {
+export function prChipFace(pr) {
   if (pr.state === "MERGED") return ["pr-merged", `PR #${pr.number} merged`];
   if (pr.state === "CLOSED") return ["pr-closed", `PR #${pr.number} closed`];
   if (pr.mergeable === "CONFLICTING") return ["conflict", `PR #${pr.number} conflicts`];
@@ -264,7 +264,7 @@ function prChip(pr, actions) {
   return chip;
 }
 
-function shipChip(ship) {
+export function shipChip(ship) {
   const refused = ship === "refused";
   const chip = span(`tab-chip ship ${ship}`, "");
   chip.append(icon("ship"), refused ? "ship refused" : "ship queued");
@@ -368,8 +368,7 @@ function foldedSummary(entry) {
 function renderHead(entry, folded, actions) {
   const head = document.createElement("div");
   head.className = "group-head";
-  head.title = `${entry.path}
-Drag to reorder`;
+  head.title = `${entry.path}\nDrag to reorder`;
   head.setAttribute("role", "button");
   head.setAttribute("aria-expanded", String(!folded));
   head.addEventListener("click", () => actions.toggleGroup(entry.path));

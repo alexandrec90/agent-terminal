@@ -70,6 +70,8 @@ const dialog = new NewTabDialog({
   inspect: (path) => send({ type: "inspect_folder", path }),
   browse: () => send({ type: "pick_folder" }),
   prepare: (path) => send({ type: "prepare_worktree", path }),
+  listPast: (path) => send({ type: "past_sessions", path }),
+  resume: (choice) => send({ type: "resume_session", ...choice }),
   listRemote: () => send({ type: "list_remote_repos" }),
   clone: (fullName) => send({ type: "clone_repo", full_name: fullName }),
   describeDeletion: (path) => send({ type: "describe_deletion", path }),
@@ -151,6 +153,9 @@ function onMessage(message) {
       break;
     case "folder":
       dialog.setFolder(message);
+      break;
+    case "past_sessions":
+      dialog.setPastSessions(message);
       break;
     case "picked":
       dialog.setPicked(message.path);

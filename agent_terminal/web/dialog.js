@@ -1,6 +1,7 @@
-// The new-session dialog. A group's "+" arrives with the folder fixed; otherwise any folder
-// can be chosen: a project, a typed path, or the native picker. Agent and worktree are
-// chosen either way. Whatever would stop a start is said here, before it happens.
+// The new-session dialog. A group's "+" arrives with the folder fixed, and offers the
+// project's unopened sessions to resume first; otherwise any folder can be chosen: a
+// project, a typed path, or the native picker. Agent and worktree are chosen either way.
+// Whatever would stop a start is said here, before it happens.
 //
 // Without a fixed folder it also manages the projects root: a project can be deleted (to
 // the Recycle Bin, after a confirmation saying what only exists here), and any of the
@@ -8,6 +9,7 @@
 
 import { confirmAction } from "./confirm.js";
 import { icon } from "./icons.js";
+import { PastSessions } from "./past.js";
 import { RemoteRepos } from "./remote.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
@@ -26,6 +28,7 @@ export class NewTabDialog {
   constructor(requests) {
     this.requests = requests;
     this.projects = [];
+    this.past = new PastSessions(requests, () => this.dialog.close());
     this.requested = null;
     this.folder = null;
     this.error = "";
@@ -93,6 +96,7 @@ export class NewTabDialog {
     this.wantsWorktree = true;
     this.pathInput.value = "";
     this.projectField.hidden = fixed !== null;
+    this.past.open(fixed);
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
     this.say("");
     this.remote.show(false);
@@ -188,6 +192,11 @@ export class NewTabDialog {
     if (!this.dialog.open) return;
     this.pathInput.value = path;
     this.choose(path);
+  }
+
+  // A list for another group, or a closed dialog, is ignored.
+  setPastSessions(message) {
+    if (this.dialog.open) this.past.set(message);
   }
 
   // The backend's answer about a folder. One for a path since replaced is ignored.

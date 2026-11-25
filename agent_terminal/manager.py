@@ -12,6 +12,7 @@ from typing import Any
 from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit
 from agent_terminal.groups import Groups, open_folders, successor
+from agent_terminal.history import HistoryLinks, SessionHistory
 from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
@@ -77,9 +78,12 @@ class TabManager:
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
-        self._pr_requests = PrRequests(self.board, gh, loop, emit)
+        self._pr_requests = PrRequests(self.board, gh, loop, emit, self._open_or_show)
         self._projects = ProjectRequests(
             settings, emit, loop, self._desktop, gh, lambda: open_folders(self._tabs)
+        )
+        history = SessionHistory(
+            settings, self.board, loop, emit, HistoryLinks(lambda: self._tabs, self._open_or_show)
         )
         self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {
             "hello": self._on_hello,
@@ -95,9 +99,9 @@ class TabManager:
             "input": self._on_input,
             "resize": self._on_resize,
             "paste": self._on_paste,
-            "pr_resume": self._on_pr_resume,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
+            **history.handlers(),
             **self._ordering.handlers(),
             **self._projects.handlers(),
         }
@@ -158,9 +162,8 @@ class TabManager:
         await self.runner.start(tab, self._size)
         await self.board.scan()
 
-    async def _on_pr_resume(self, message: dict[str, Any]) -> None:
-        """Bring a PR's session back as a tab, or go to the tab that already has it."""
-        tab = self._pr_requests.tab_for_prompt(message)
+    async def _open_or_show(self, tab: Tab) -> None:
+        """Open a tab resuming a session, or go to the tab that already has it."""
         existing = next((t for t in self._tabs if t.session_id == tab.session_id), None)
         if existing is not None:
             self._active_id = switch_view(self._tabs, self._active_id, existing.id)

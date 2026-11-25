@@ -14,6 +14,7 @@ from agent_terminal import manager as module
 from agent_terminal.attention import FINISHED, NEEDS_INPUT, NO_ATTENTION, QUERY_REPLY
 from agent_terminal.desktop import Desktop, is_web_url
 from agent_terminal.manager import TabManager, switch_view
+from agent_terminal.prompts import claude_transcript_dir
 from agent_terminal.pty_session import SpawnError
 from agent_terminal.settings import Settings
 from agent_terminal.store import SAVE_DELAY_SECONDS, Snapshot, Tab, load_snapshot, save_snapshot
@@ -705,6 +706,40 @@ def test_is_web_url(url, allowed):
 def make_saved_tab(project_path: str, **fields) -> Tab:
     defaults = {"id": "saved", "project": "repo", "agent": "claude", "created_at": 1.0}
     return Tab(project_path=project_path, **{**defaults, **fields})
+
+
+def write_session(rig: Rig, folder: Path, session_id: str) -> None:
+    directory = claude_transcript_dir(rig.settings.claude_home, folder)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{session_id}.jsonl").write_text("{}\n")
+
+
+@run
+async def test_a_groups_unopened_sessions_leave_out_its_tabs(rig):
+    await rig.hello()
+    tab = await rig.create(rig.plain)
+    write_session(rig, rig.plain, tab["session_id"])
+    write_session(rig, rig.plain, "earlier")
+    await rig.manager.handle({"type": "past_sessions", "path": str(rig.plain)})
+    sent = next(m for m in reversed(rig.messages) if m["type"] == "past_sessions")
+    assert [s["session_id"] for s in sent["sessions"]] == ["earlier"]
+
+
+@run
+async def test_resuming_a_past_session_opens_it_once(rig):
+    await rig.hello()
+    write_session(rig, rig.plain, "earlier")
+    message = {"type": "resume_session", "path": str(rig.plain), "session_id": "earlier"}
+    await rig.manager.handle(message)
+    assert [t["session_id"] for t in rig.tabs()] == ["earlier"]
+    assert rig.tabs()[0]["project_path"] == str(rig.plain)
+    assert rig.processes[0].command().startswith("& 'claude' '--resume' 'earlier'")
+
+    # Clicked again from a list drawn before it opened: its tab is shown, not doubled.
+    await rig.create(rig.plain)
+    await rig.manager.handle(message)
+    assert len(rig.tabs()) == 2
+    assert rig.state()["active_id"] == rig.tabs()[0]["id"]
 
 
 @run

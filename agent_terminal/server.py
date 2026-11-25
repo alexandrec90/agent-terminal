@@ -38,6 +38,8 @@ SLOW_MESSAGES = frozenset(
         "pr_merge",
         "pr_close",
         "inspect_folder",
+        "past_sessions",
+        "resume_session",
         "list_remote_repos",
         "clone_repo",
         "describe_deletion",

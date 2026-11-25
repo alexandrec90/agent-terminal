@@ -43,6 +43,18 @@ Closing the window ends the agents and keeps the tabs: the next launch resumes e
 session, with its worktree, grey state and selected tab. **×** forgets a tab for good. It
 does not remove a worktree the session created, since that may hold work.
 
+### Sleeping tabs
+
+A Claude tab left idle and out of view for 15 minutes goes to sleep: its agent is ended,
+which frees about half a gigabyte, and the tab shows a moon. Click it and the session
+resumes, in a few seconds. A sleeping tab stays asleep when the app starts again.
+
+A tab is left awake if it is working or waiting on you, holds text you have not sent, has
+a background command or subagent, or ever set itself a wake-up or a schedule. So is one
+whose session changed with `/clear` or `/resume`, as the tab would wake into the old one,
+and every Codex tab. `AGENT_TERMINAL_SLEEP_AFTER_SECONDS` changes the time; `0` turns
+it off.
+
 ### Updating without stopping the agents
 
 Each tab's process lives in a **session host**, a small background process the app starts
@@ -130,6 +142,9 @@ agent_terminal/              the app
   agents.py                  how each agent is launched and resumed
   codex_sessions.py          finding a Codex tab's session on disk
   runner.py                  a tab's process; pty_session.py is the pseudo-console
+  sleeper.py                 putting idle tabs to sleep and waking them
+  rest.py                    whether a session can be ended now and resumed later
+  processes.py               what is running under an agent
   sessions.py                where a tab's process lives: here, or in the session host
   host.py                    the session host, which outlives the window
   host_client.py             the app's side of it; host_protocol.py is the wire format

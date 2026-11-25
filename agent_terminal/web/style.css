@@ -337,6 +337,11 @@ button {
   animation: spin 1s linear infinite;
 }
 
+/* No process behind it. The moon says so; the dimmed title keeps awake tabs standing out. */
+.tab.asleep:not(.attention) .tab-title {
+  color: var(--muted);
+}
+
 @keyframes spin {
   to {
     transform: rotate(1turn);

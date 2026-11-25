@@ -235,7 +235,9 @@ class NewProjectRequests:
             kept.write(f"\nexit code {code}\n")
         target = root / choice["name"]
         if code != 0:
-            raise ValueError(f"new-project.py exited {code}; everything it said is in {self.log_file}")
+            raise ValueError(
+                f"new-project.py exited {code}; everything it said is in {self.log_file}"
+            )
         if choice["apply"] and not target.is_dir():
             raise ValueError(f"new-project.py finished, but {target} is not there")
         return {"applied": choice["apply"], "path": str(target) if choice["apply"] else ""}

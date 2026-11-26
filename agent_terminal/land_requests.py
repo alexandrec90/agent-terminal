@@ -18,6 +18,11 @@ Handler = Callable[[dict[str, Any]], Awaitable[None]]
 ENTER_DELAY_SECONDS = 0.5
 # Until the agent reports that it is working, a second click would ask it twice.
 SETTLE_SECONDS = 2.0
+# How often the agent is looked at while it lands, and how long it has to take it up.
+STATUS_SECONDS = 1.0
+TAKE_UP_SECONDS = 30.0
+# The agent is still at the land: working on it, or asking the user something about it.
+LANDING_STATUSES = frozenset({attention.STARTING, attention.WORKING, attention.BLOCKED})
 
 
 class LandRequests:
@@ -48,10 +53,29 @@ class LandRequests:
             raise ValueError("nothing to land")
         prompt = land_prompt(tab.agent, fields["land"], self._board.pr_of_tab(tab.id))
         self._sending.add(tab.id)
+        self._board.hold_land(tab.id)
         try:
-            self._type(tab.id, prompt)
-            await asyncio.sleep(ENTER_DELAY_SECONDS)
-            self._type(tab.id, "\r")
-            await asyncio.sleep(SETTLE_SECONDS)
+            try:
+                self._type(tab.id, prompt)
+                await asyncio.sleep(ENTER_DELAY_SECONDS)
+                self._type(tab.id, "\r")
+                await asyncio.sleep(SETTLE_SECONDS)
+            finally:
+                self._sending.discard(tab.id)
+            await self._until_landed(tab.id)
         finally:
-            self._sending.discard(tab.id)
+            await self._board.release_land(tab)
+
+    def _status(self, tab_id: str) -> str:
+        live = self._runner.live.get(tab_id)
+        return live.status if live is not None else attention.EXITED
+
+    async def _until_landed(self, tab_id: str) -> None:
+        """Wait for the agent to take the request up and then put it down: back at its
+        prompt, asleep there, or gone."""
+        waited = 0.0
+        while self._status(tab_id) == attention.IDLE and waited < TAKE_UP_SECONDS:
+            await asyncio.sleep(STATUS_SECONDS)
+            waited += STATUS_SECONDS
+        while self._status(tab_id) in LANDING_STATUSES:
+            await asyncio.sleep(STATUS_SECONDS)

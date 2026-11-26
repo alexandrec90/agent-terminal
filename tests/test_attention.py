@@ -14,7 +14,6 @@ from agent_terminal.attention import (
     Presence,
     advance,
     clean_title,
-    is_drafting,
     is_user_input,
     parse_program_state,
     parse_title,
@@ -133,24 +132,6 @@ class TestCleanTitle:
 )
 def test_is_user_input(data, typed):
     assert is_user_input(data) is typed
-
-
-@pytest.mark.parametrize(
-    ("data", "before", "after"),
-    [
-        ("h", False, True),
-        ("\x7f", False, False),
-        ("\x7f", True, True),
-        ("\r", True, False),
-        ("\x03", True, False),
-        # A new line in the prompt, a reply to a query, and a paste.
-        ("\x1b\r", True, True),
-        ("\x1b[?1;2c", False, False),
-        ("\x1b[200~text\x1b[201~", False, True),
-    ],
-)
-def test_is_drafting(data, before, after):
-    assert is_drafting(data, before) is after
 
 
 class TestAdvance:

@@ -2,7 +2,7 @@
 // that no tab has open. Titles are what the user typed, so they only ever go in as text.
 
 import { icon } from "./icons.js";
-import { prChipFace, shipChip, span } from "./sidebar.js";
+import { fullOnHover, prChipFace, shipChip, span } from "./sidebar.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
 const MINUTE = 60;
@@ -58,7 +58,7 @@ export function renderPastSession(session, now, resume) {
   row.title = session.tree;
   const main = span("tab-main", "");
   main.append(
-    span("tab-title", session.title || untitled(session)),
+    fullOnHover(span("tab-title", session.title || untitled(session))),
     span("tab-meta", sessionMeta(session, now)),
   );
   const chips = stateChips(session);

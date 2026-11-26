@@ -13,13 +13,17 @@ from agent_terminal.productivity import (
     CreatedPr,
     Productivity,
     count_prompts,
+    count_prompts_by_project,
     count_prs,
+    count_prs_by_project,
     describe,
     fetch_prs,
     is_prompt,
     load_prs,
     mark_own,
     parse_search,
+    project_of,
+    repository_of,
     save_prs,
     summarize,
 )
@@ -103,6 +107,103 @@ def test_prompts_are_counted_by_local_day():
 def test_lines_that_are_not_records_are_skipped():
     lines = ["", "{half", "[]", '{"display": 1, "timestamp": 1}', '{"display": "x"}']
     assert count_prompts([*lines, history_line("a")]) == {TODAY: 1}
+
+
+ROOT = "C:\\Users\\me\\vs-code"
+
+
+@pytest.mark.parametrize(
+    ("folder", "project"),
+    [
+        ("C:\\Users\\me\\vs-code\\Agent-Terminal", "agent-terminal"),
+        ("C:\\Users\\me\\vs-code\\agent-terminal\\scripts\\hooks", "agent-terminal"),
+        ("C:\\Users\\me\\vs-code\\agent-terminal\\.claude\\worktrees\\x", "agent-terminal"),
+        ("c:\\users\\me\\VS-CODE\\devkit", "devkit"),
+        ("D:\\elsewhere\\tool\\.claude\\worktrees\\y\\src", "tool"),
+        ("D:\\elsewhere\\tool", "tool"),
+        ("C:\\Users\\me\\vs-code", "vs-code"),
+        ("C:\\", "c:\\"),
+        ("", ""),
+    ],
+)
+def test_a_folder_is_counted_for_its_project(folder, project):
+    assert project_of(folder, ROOT) == project
+
+
+def test_prompts_are_counted_by_project_and_day():
+    def line(text: str, folder: str, day: date = TODAY) -> str:
+        record = json.loads(history_line(text, day))
+        record["project"] = folder
+        return json.dumps(record)
+
+    worktree = f"{ROOT}\\agent-terminal\\.claude\\worktrees\\x"
+    lines = [
+        line("a", f"{ROOT}\\agent-terminal"),
+        line("b", worktree),
+        line("c", worktree, YESTERDAY),
+        line("/clear", worktree),
+        line("d", f"{ROOT}\\devkit"),
+        line("e", ""),
+        history_line("f").replace('"project"', '"elsewhere"'),
+        "{half",
+    ]
+    assert count_prompts_by_project(lines, ROOT) == {
+        "agent-terminal": {TODAY: 2, YESTERDAY: 1},
+        "devkit": {TODAY: 1},
+    }
+
+
+@pytest.mark.parametrize(
+    ("url", "repository"),
+    [
+        ("https://github.com/o/Agent-Terminal/pull/1", "agent-terminal"),
+        ("https://github.com/o", ""),
+        ("1", ""),
+    ],
+)
+def test_a_pr_is_counted_for_its_repository(url, repository):
+    assert repository_of(url) == repository
+
+
+def test_only_the_users_own_prs_are_counted_by_project():
+    at = datetime(2026, 11, 25, 12).astimezone().isoformat()
+    prs = [
+        CreatedPr("https://github.com/o/a/pull/1", at, "x", own=True),
+        CreatedPr("https://github.com/o/a/pull/2", at, "y", own=True),
+        CreatedPr("https://github.com/o/b/pull/1", at, "z"),
+        CreatedPr("no-url", at, "w", own=True),
+    ]
+    assert count_prs_by_project(prs) == {"a": {TODAY: 2}}
+
+
+def test_each_project_is_described_over_the_totals_days():
+    message = describe(
+        {YESTERDAY: 3},
+        {date(2026, 11, 23): 1, TODAY: 1},
+        TODAY,
+        {"a": {YESTERDAY: 2}, "b": {YESTERDAY: 1}},
+        {"a": {date(2026, 11, 23): 1}, "c": {TODAY: 1}},
+    )
+    assert sorted(message["projects"]) == ["a", "b", "c"]
+    a = message["projects"]["a"]
+    assert a["days"] == [
+        {"day": "2026-11-23", "prompts": None, "prs": 1},
+        {"day": "2026-11-24", "prompts": 2, "prs": 0},
+        {"day": "2026-11-25", "prompts": 0, "prs": 0},
+    ]
+    assert a["prompts"]["record"] == 2
+    assert message["projects"]["c"]["prs"]["today"] == 1
+    assert message["projects"]["c"]["prompts"]["today"] == 0
+
+
+def test_before_github_answers_no_project_has_prs():
+    message = describe({TODAY: 1}, None, TODAY, {"a": {TODAY: 1}}, None)
+    assert message["projects"]["a"]["prs"] is None
+    assert message["projects"]["a"]["prompts"]["today"] == 1
+
+
+def test_with_nothing_there_are_no_projects():
+    assert describe({}, {}, TODAY)["projects"] == {}
 
 
 def test_only_the_users_own_prs_are_counted():
@@ -241,6 +342,8 @@ def test_a_new_prompt_is_sent_and_no_change_is_not(tmp_path):
 
     sent = drive(tmp_path, FakeGh(), body)
     assert [message["prompts"]["today"] for message in sent] == [1, 2]
+    # history_line types every prompt in C:\code.
+    assert sent[-1]["projects"]["code"]["prompts"]["today"] == 2
 
 
 def test_without_a_history_there_are_no_prompts(tmp_path):
@@ -262,6 +365,7 @@ def test_prs_are_sent_and_saved(tmp_path):
 
     sent = drive(tmp_path, FakeGh([pr, robot]), body)
     assert sent[-1]["prs"]["record"] == 1
+    assert sent[-1]["projects"]["demo"]["prs"]["today"] == 1
     saved = load_prs(tmp_path / "data" / "created-prs.json")
     assert {key: entry.own for key, entry in saved.items()} == {url: True, "2": False}
 

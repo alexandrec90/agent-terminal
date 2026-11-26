@@ -1,3 +1,5 @@
+// First, so its listeners are in place before any other module runs.
+import { reportErrorsTo } from "./errors.js";
 import { AppBar } from "./appbar.js";
 import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
@@ -82,7 +84,9 @@ const dialog = new NewTabDialog({
   listRemote: () => send({ type: "list_remote_repos" }),
   clone: (fullName) => send({ type: "clone_repo", full_name: fullName }),
   describeDeletion: (path) => send({ type: "describe_deletion", path }),
-  deleteProject: (path) => send({ type: "delete_project", path }),
+  deleteProject: (path, force) => send({ type: "delete_project", path, force }),
+  listRetired: () => send({ type: "list_retired" }),
+  restore: (name) => send({ type: "restore_project", name }),
   listPresets: () => send({ type: "list_presets" }),
   newProject: (choice) => send({ type: "new_project", ...choice }),
 });
@@ -106,6 +110,7 @@ const appBar = new AppBar(document.getElementById("app-bar"), {
 const productivity = new Productivity();
 
 const send = connect(onMessage, () => {
+  reportErrorsTo(send);
   send({ type: "hello", ...terminals.dimensions() });
   send({ type: "app_status" });
   send({ type: "productivity" });
@@ -140,6 +145,7 @@ function render() {
     folded,
     hidden,
     kept,
+    today: (name) => productivity.today(name),
   };
   renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
@@ -177,6 +183,8 @@ const dialogMessages = {
   cloned: (message) => dialog.remote.setCloned(message),
   deletion: (message) => dialog.setDeletion(message),
   deleted: (message) => dialog.setDeleted(message),
+  retired: (message) => dialog.retired.setRetired(message),
+  restored: (message) => dialog.retired.setRestored(message),
   presets: (message) => dialog.newProject.setPresets(message),
   new_project_output: (message) => dialog.newProject.addLine(message.line),
   new_project_done: (message) => dialog.newProject.setDone(message),
@@ -213,6 +221,8 @@ function onMessage(message) {
       break;
     case "productivity":
       productivity.set(message);
+      // Each group's heading says its own counts for today.
+      render();
       break;
     default:
       console.warn("unknown message", message);

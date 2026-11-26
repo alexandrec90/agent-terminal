@@ -11,6 +11,7 @@ from typing import Any
 
 from agent_terminal import agents, attention, folders, gitinfo
 from agent_terminal.desktop import Desktop, DesktopRequests, Emit, Handler
+from agent_terminal.errors import page_error_text
 from agent_terminal.groups import Groups, open_folders, successor
 from agent_terminal.history import HistoryLinks, SessionHistory
 from agent_terminal.land_requests import LandRequests
@@ -105,6 +106,7 @@ class TabManager:
             "input": self._on_input,
             "resize": self._on_resize,
             "paste": self._on_paste,
+            "page_error": self._on_page_error,
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
             **LandRequests(self.board, self.runner, self._tab).handlers(),
@@ -117,7 +119,8 @@ class TabManager:
 
     async def handle(self, message: dict[str, Any]) -> None:
         """Apply one message. An unknown type or a tab already closed is logged and
-        dropped: both are ordinary when a click races a process exit."""
+        dropped: both are ordinary when a click races a process exit. Anything else a
+        handler raises is logged with its traceback, and the app carries on."""
         handler = self._handlers.get(message.get("type", ""))
         if handler is None:
             log.warning("unknown message: %r", message.get("type"))
@@ -126,6 +129,11 @@ class TabManager:
             await handler(message)
         except (KeyError, ValueError, TypeError) as exc:
             log.warning("dropped %s message: %r", message.get("type"), exc)
+        except Exception:
+            log.exception("%s message failed", message.get("type"))
+
+    async def _on_page_error(self, message: dict[str, Any]) -> None:
+        log.error("page error: %s", page_error_text(message))
 
     async def _on_hello(self, message: dict[str, Any]) -> None:
         self._size = (int(message["rows"]), int(message["cols"]))

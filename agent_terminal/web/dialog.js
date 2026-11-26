@@ -3,15 +3,17 @@
 // project, a typed path, or the native picker. Agent and worktree are chosen either way.
 // Whatever would stop a start is said here, before it happens.
 //
-// Without a fixed folder it also manages the projects root: a project can be deleted (to
-// the Recycle Bin, after a confirmation saying what only exists here), and any of the
-// user's GitHub repositories not yet in it can be cloned in, or a new project made from
-// devkit's templates.
+// Without a fixed folder it also manages the projects root: a project can be deleted
+// (retired through devkit, then to the Recycle Bin, after a confirmation saying what only
+// exists here and what retiring stops), a retired one restored, and any of the user's
+// GitHub repositories not yet in it can be cloned in, or a new project made from devkit's
+// templates.
 
 import { confirmAction } from "./confirm.js";
 import { icon } from "./icons.js";
 import { PastSessions } from "./past.js";
 import { RemoteRepos } from "./remote.js";
+import { RetiredProjects } from "./retired.js";
 import { NewProject } from "./scaffold.js";
 
 const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
@@ -51,6 +53,12 @@ export class NewTabDialog {
       list: requests.listRemote,
       clone: requests.clone,
       cloned: (path) => this.onCloned(path),
+      say: (text) => this.say(text),
+    });
+    this.retired = new RetiredProjects({
+      list: requests.listRetired,
+      restore: requests.restore,
+      restored: (path) => this.onCloned(path),
       say: (text) => this.say(text),
     });
     this.newProject = new NewProject({
@@ -107,6 +115,7 @@ export class NewTabDialog {
     this.title.textContent = fixed ? `New session in ${fixed.name}` : "New session";
     this.say("");
     this.remote.show(false);
+    this.retired.show(false);
     // A run under way stays in view: what it prints is still arriving.
     if (!this.newProject.running) this.newProject.show(false);
     this.renderProjects();
@@ -114,10 +123,17 @@ export class NewTabDialog {
     this.dialog.showModal();
   }
 
-  // A line under the project list: what a clone or delete came to.
-  say(text) {
+  // A line under the project list: what a clone or delete came to, or, as `progress`,
+  // what is still under way.
+  say(text, progress = false) {
     this.message.textContent = text;
     this.message.hidden = !text;
+    this.message.classList.toggle("progress", progress);
+  }
+
+  deleteProject(message, force) {
+    this.say(`Retiring and deleting ${message.name}…`, true);
+    this.requests.deleteProject(message.requested, force);
   }
 
   renderProjects() {
@@ -161,11 +177,27 @@ export class NewTabDialog {
     const lines = [`Move ${message.name} to the Recycle Bin?`];
     if (message.risks.length) lines.push("Only on this machine:", ...message.risks);
     else lines.push("Everything in it is pushed to a remote.");
-    confirmAction(lines, "Delete", () => this.requests.deleteProject(message.requested));
+    const retire = message.retire ?? { steps: [], notes: [] };
+    if (retire.steps.length) {
+      lines.push("First, devkit's retire-project.py will:", ...retire.steps.map((s) => `• ${s}`));
+    }
+    lines.push(...retire.notes);
+    confirmAction(lines, "Delete", () => this.deleteProject(message, false));
   }
 
   setDeleted(message) {
     if (!this.dialog.open) return;
+    if (message.error && message.can_force) {
+      // devkit's registry gate: unpushed work or a live box. Its words, then a choice.
+      const lines = [
+        `devkit refused to retire ${message.name}:`,
+        message.error,
+        "Delete anyway retires it over that (--force), then moves the folder to the Recycle Bin.",
+      ];
+      confirmAction(lines, "Delete anyway", () => this.deleteProject(message, true));
+      this.say(message.error);
+      return;
+    }
     if (message.error) {
       this.say(message.error);
       return;

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import inspect
 import json
+import logging
 import subprocess
 import threading
 from pathlib import Path
@@ -1020,6 +1021,40 @@ def test_more_handlers_answer_more_types(tmp_path):
 
     asyncio.run(body())
     assert seen == [{"type": "app_status"}]
+
+
+def test_an_unexpected_failure_is_logged_with_its_traceback(tmp_path, caplog):
+    async def broken(_message):
+        raise RuntimeError("handler broke")
+
+    async def body() -> None:
+        settings = Settings(data_dir=tmp_path, gh_command=str(tmp_path / "no-gh"))
+        loop = asyncio.get_running_loop()
+        manager = TabManager(settings, print, loop, handlers={"app_status": broken})
+        # The app carries on: the next message is still handled.
+        await manager.handle({"type": "app_status"})
+
+    caplog.set_level(logging.ERROR, logger=module.log.name)
+    asyncio.run(body())
+    [record] = [r for r in caplog.records if r.name == module.log.name]
+    assert record.getMessage() == "app_status message failed"
+    assert record.exc_info is not None
+    assert "handler broke" in str(record.exc_info[1])
+
+
+def test_a_page_error_reaches_the_log(tmp_path, caplog):
+    async def body() -> None:
+        settings = Settings(data_dir=tmp_path, gh_command=str(tmp_path / "no-gh"))
+        manager = TabManager(settings, print, asyncio.get_running_loop())
+        await manager.handle(
+            {"type": "page_error", "message": "boom", "source": "app.js", "line": 1, "column": 2}
+        )
+
+    caplog.set_level(logging.ERROR, logger=module.log.name)
+    asyncio.run(body())
+    assert [r.getMessage() for r in caplog.records if r.name == module.log.name] == [
+        "page error: boom\nat app.js:1:2"
+    ]
 
 
 def ids(rig: Rig) -> list[str]:

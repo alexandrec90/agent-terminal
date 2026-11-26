@@ -64,7 +64,9 @@ the window that comes back rebuilds each tab's screen from it.
 | `This copy of the app cannot update itself…` | It was installed as a copy (`uv tool install`, `pip install`), which has no checkout to pull. Run the `.venv\Scripts\agent-terminal.exe` it names instead |
 
 The app checks `origin/main` at start and every half hour, from the checkout it runs
-from. Closing the window still ends everything, host included. If the window crashes,
+from, and counts the commits since the one it *started* on. That checkout is often
+already up to date, since `land.py` fast-forwards it on every merge, but the window runs
+the code it started with until it restarts. Closing the window still ends everything, host included. If the window crashes,
 the host keeps the agents for an hour (`AGENT_TERMINAL_HOST_ORPHAN_SECONDS`) for the next
 launch to take back. If the host cannot start, the app runs the agents itself as it did
 before, and a restart ends them.
@@ -122,6 +124,12 @@ are not counted. A PR counts if a session you prompted opened it, or was on its 
 first (`agent_terminal/own_prs.py`); scheduled tasks, fixers and bots are left out. Codex
 is in neither count. The average is over days that had any, before today; the record can
 be today's.
+
+The graph's project picker shows the same for one project, each choice naming its counts
+for today, and a group's heading shows its project's prompts and PRs today, on a day it
+had any. A prompt belongs to the project it was typed in: a worktree's to its
+repository, a subfolder's to its folder under the projects root. A PR belongs to the
+project its repository is named after.
 
 ## How a tab knows
 

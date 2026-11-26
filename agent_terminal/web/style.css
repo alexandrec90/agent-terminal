@@ -142,7 +142,8 @@ button {
 
 /* Blue and orange: told apart under any color blindness, and neither is a status here. */
 #tally,
-#productivity {
+#productivity,
+.group-today {
   --series-prompts: #338ced;
   --series-prs: #e76624;
 }
@@ -215,6 +216,21 @@ button {
 .productivity-head h2 {
   flex: 1;
   margin: 0;
+}
+
+#productivity-project {
+  max-width: 320px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+#productivity-project:focus {
+  border-color: var(--accent);
+  outline: 0;
 }
 
 #productivity-ranges button,
@@ -352,6 +368,32 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A project's prompts and PRs today, each behind its series' dot as in the tally. */
+.group-today {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.group-today span::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--series-prompts);
+  content: "";
+}
+
+.group-today .prs::before {
+  background: var(--series-prs);
 }
 
 .group-count {
@@ -1047,7 +1089,12 @@ legend {
   white-space: pre-wrap;
 }
 
+#project-message.progress {
+  color: var(--muted);
+}
+
 #remote-toggle,
+#retired-toggle,
 #scaffold-toggle {
   display: block;
   margin-top: 8px;
@@ -1057,6 +1104,7 @@ legend {
 }
 
 #remote-toggle:hover,
+#retired-toggle:hover,
 #scaffold-toggle:hover {
   text-decoration: underline;
 }
@@ -1134,14 +1182,28 @@ legend {
   white-space: pre-wrap;
 }
 
-#remote {
+#remote,
+#retired {
   margin-top: 6px;
 }
 
-#remote-status {
+#remote-status,
+#retired-status {
   margin: 0 0 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+#retired-status:empty {
+  display: none;
+}
+
+#retired-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .tab-chip.deploy {

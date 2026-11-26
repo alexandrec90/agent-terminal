@@ -381,7 +381,23 @@ function foldedSummary(entry) {
   return summary;
 }
 
-function renderHead(entry, folded, actions) {
+// The project's prompts and PRs today, or null on a day with neither. `today(name)` gives
+// `{prompts, prs}`, `prs` null until GitHub has answered.
+export function todayBadge(name, today) {
+  const counts = today?.(name);
+  if (!counts || (!counts.prompts && !counts.prs)) return null;
+  const badge = span("group-today", "");
+  badge.append(span("prompts", String(counts.prompts)));
+  const words = [`${counts.prompts} prompt${counts.prompts === 1 ? "" : "s"}`];
+  if (counts.prs !== null) {
+    badge.append(span("prs", String(counts.prs)));
+    words.push(`${counts.prs} PR${counts.prs === 1 ? "" : "s"}`);
+  }
+  badge.title = `Today in ${name}: ${words.join(" and ")}`;
+  return badge;
+}
+
+function renderHead(entry, folded, actions, today) {
   const head = document.createElement("div");
   head.className = "group-head";
   head.title = `${entry.path}\nDrag to reorder`;
@@ -392,6 +408,8 @@ function renderHead(entry, folded, actions) {
   const fold = span("group-fold", "");
   fold.append(icon("chevron"));
   head.append(fold, span("group-name", entry.name));
+  const badge = todayBadge(entry.name, today);
+  if (badge) head.append(badge);
   if (folded) head.append(foldedSummary(entry));
   const closeLabel = entry.tabs.length
     ? `Close every session in ${entry.name}`
@@ -409,7 +427,7 @@ function renderGroup(entry, paths, view, actions) {
   section.className = folded ? "group folded" : "group";
   section.dataset.project = entry.name;
   section.dataset.path = entry.path;
-  const head = renderHead(entry, folded, actions);
+  const head = renderHead(entry, folded, actions, view.today);
   draggableGroup(section, head, entry, paths, actions);
   section.append(head);
   if (!folded) {
@@ -431,7 +449,8 @@ export function visibleGroups(tabs, prs, hidden, order = [], kept = []) {
 
 // `view` says what is on stage: the active tab, any PR being reviewed over it, which groups
 // are folded (a Set of paths), which are hidden, and which are kept with no tab
-// (`{path, name}` each). `order` is how the user arranged them.
+// (`{path, name}` each), and `today(name)`, a project's counts for today. `order` is how
+// the user arranged them.
 export function renderSidebar(container, tabs, prs, view, actions, order = []) {
   const scroll = container.scrollTop;
   const entries = visibleGroups(tabs, prs, view.hidden, order, view.kept ?? []);

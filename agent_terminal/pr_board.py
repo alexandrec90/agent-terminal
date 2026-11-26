@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_terminal import agents, gitinfo, shipping
-from agent_terminal.delivery import DeliveryReader, Progress
+from agent_terminal.delivery import NO_ACTION, DeliveryReader, Progress
 from agent_terminal.folders import display_name
 from agent_terminal.projects import list_projects
 from agent_terminal.prompts import Prompt, find_prompt
@@ -93,6 +93,9 @@ class PrBoard:
         self._facts: dict[str, TabFacts] = {}
         self._delivery = DeliveryReader(settings.devkit_root, APP_ROOT)
         self._progress: dict[str, Progress] = {}
+        self._delivery_started = self._delivery_stored = 0
+        # Tabs whose agent was asked to land and has not been caught up with since.
+        self._landing: set[str] = set()
         self._complained: set[str] = set()
         self._gh_missing = False
         self._task: asyncio.Task[None] | None = None
@@ -105,6 +108,9 @@ class PrBoard:
         found = self.pr_for(facts.repository, facts.branch)
         pr = {**found.to_dict(), "repo": str(facts.repository)} if found else None
         progress = asdict(self._progress.get(tab.id, Progress()))
+        if tab.id in self._landing:
+            # Its PR is on its way: until it is known, the work reads as never shipped.
+            progress["land"] = NO_ACTION
         return {"ship": facts.ship, "branch": facts.branch, "pr": pr, **progress}
 
     def pr_of_tab(self, tab_id: str) -> PullRequest | None:
@@ -203,9 +209,33 @@ class PrBoard:
                 for tab_id, tree, agent, facts, pr in wanted
             }
 
+        self._delivery_started += 1
+        started = self._delivery_started
         progress = await self._loop.run_in_executor(None, read_all)
+        # A read begun before a later one knew less, so it never overwrites it.
+        if started < self._delivery_stored:
+            return
+        self._delivery_stored = started
         if progress != self._progress:
             self._progress = progress
+            self._links.changed()
+
+    def hold_land(self, tab_id: str) -> None:
+        """Offer no land on a tab whose agent is landing: when it is done, its work reads
+        as unshipped until a poll finds the PR it made."""
+        self._landing.add(tab_id)
+        self._links.changed()
+
+    async def release_land(self, tab: Tab) -> None:
+        """Catch up on a tab whose agent has finished landing, then offer what is left."""
+        try:
+            await self.scan()
+            repository = self._facts.get(tab.id, TabFacts()).repository
+            if repository is not None:
+                await self.refresh(repository)
+            await self.check_delivery()
+        finally:
+            self._landing.discard(tab.id)
             self._links.changed()
 
     async def refresh(self, repository: Path | None = None) -> None:

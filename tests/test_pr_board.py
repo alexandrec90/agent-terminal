@@ -277,6 +277,89 @@ async def test_delivery_reaches_the_tab_and_says_so_once(rig):
     assert rig.board.pr_of_tab("gone") is None
 
 
+def landable(rig: Rig) -> Tab:
+    """A tab with the land skill and a commit that is on no PR yet."""
+    tree = rig.worktree("a")
+    git(rig.repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+    skill = tree / ".claude" / "skills" / "land" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("land")
+    git(tree, "add", ".")
+    git(tree, "commit", "--message", "work")
+    return rig.tab(tree)
+
+
+def landed(tab: Tab) -> PullRequest:
+    """The PR the land skill leaves: merged, with the tab's commit at its head."""
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],  # noqa: S607 - fixed test command
+        cwd=tab.cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return replace(make_pr(7, state="MERGED"), head_oid=head)
+
+
+@run
+async def test_a_landing_tab_offers_no_land_until_it_is_caught_up(rig):
+    tab = landable(rig)
+    await rig.board.scan()
+    await rig.board.check_delivery()
+    assert rig.board.tab_fields(tab)["land"] == "create"
+
+    changes = rig.changes
+    rig.board.hold_land(tab.id)
+    assert rig.changes == changes + 1
+    assert rig.board.tab_fields(tab)["land"] == ""
+    # The agent is done and its PR merged, but no poll has been since.
+    await rig.board.check_delivery()
+    assert rig.board.tab_fields(tab)["land"] == ""
+
+    rig.gh.branches["worktree-a"] = landed(tab)
+    await rig.board.release_land(tab)
+    fields = rig.board.tab_fields(tab)
+    assert fields["pr"]["number"] == 7
+    assert fields["land"] == ""
+
+
+@run
+async def test_a_land_that_made_no_pr_is_offered_again(rig):
+    tab = landable(rig)
+    await rig.board.scan()
+    rig.board.hold_land(tab.id)
+    await rig.board.release_land(tab)
+    assert rig.board.tab_fields(tab)["land"] == "create"
+
+
+@run
+async def test_a_delivery_read_begun_earlier_never_overwrites_a_later_one(rig):
+    tab = landable(rig)
+    await rig.board.scan()
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    real = loop.run_in_executor
+
+    async def slow_first(executor, call, *args):
+        result = await real(executor, call, *args)
+        if not started.is_set():
+            started.set()
+            await finish.wait()
+        return result
+
+    setattr(loop, "run_in_executor", slow_first)  # noqa: B010 - an instance's method, for this loop only
+    earlier = asyncio.create_task(rig.board.check_delivery())
+    await started.wait()
+    # The PR merges and a later read sees it before the earlier one is stored.
+    rig.gh.branches["worktree-a"] = landed(tab)
+    await rig.board.refresh()
+    await rig.board.check_delivery()
+    finish.set()
+    await earlier
+    assert rig.board.tab_fields(tab)["land"] == ""
+
+
 @run
 async def test_a_branch_with_no_pr_is_asked_about_again(rig):
     rig.tab(rig.worktree("a"))

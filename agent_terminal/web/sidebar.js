@@ -403,16 +403,27 @@ export function todayBadge(name, today) {
   return badge;
 }
 
+// A group with neither a tab nor a PR has nothing to fold: its heading is not a toggle.
+export function foldable(entry) {
+  return entry.tabs.length > 0 || entry.prs.length > 0;
+}
+
 function renderHead(entry, folded, actions, today) {
   const head = document.createElement("div");
   head.className = "group-head";
   head.title = `${entry.path}\nDrag to reorder`;
-  head.setAttribute("role", "button");
-  head.setAttribute("aria-expanded", String(!folded));
-  head.addEventListener("click", () => actions.toggleGroup(entry.path));
 
+  // The chevron's room is kept when it is hidden, so every group's name lines up.
   const fold = span("group-fold", "");
   fold.append(icon("chevron"));
+  if (foldable(entry)) {
+    head.setAttribute("role", "button");
+    head.setAttribute("aria-expanded", String(!folded));
+    head.addEventListener("click", () => actions.toggleGroup(entry.path));
+  } else {
+    head.classList.add("empty");
+    fold.classList.add("empty");
+  }
   head.append(fold, span("group-name", entry.name));
   const badge = todayBadge(entry.name, today);
   if (badge) head.append(badge);
@@ -429,7 +440,7 @@ function renderHead(entry, folded, actions, today) {
 
 function renderGroup(entry, paths, view, actions) {
   const section = document.createElement("section");
-  const folded = view.folded.has(entry.path);
+  const folded = foldable(entry) && view.folded.has(entry.path);
   section.className = folded ? "group folded" : "group";
   section.dataset.project = entry.name;
   section.dataset.path = entry.path;

@@ -356,6 +356,32 @@ def test_a_group_folds_to_its_heading_and_back(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_an_empty_group_has_no_fold_toggle(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        await open_tab(window, "alpha")
+        group = '[data-project="alpha"]'
+        chevron_shown = (
+            f"getComputedStyle(document.querySelector('{group} .group-fold')).visibility"
+            " === 'visible'"
+        )
+        assert await window.js(chevron_shown) is True
+
+        await window.click(f"{group} .tab-close")
+        tabs = f"document.querySelectorAll('{group} .tab').length"
+        await window.wait(f"{tabs} === 0", "the group's last tab to close")
+        assert await window.js(chevron_shown) is False
+        assert await window.js(f"document.querySelector('{group} .group-head').role") is None
+
+        # Clicking the heading of the kept, empty group does not fold it.
+        await window.click(f"{group} .group-head")
+        assert (
+            await window.js(f"document.querySelector('{group}').classList.contains('folded')")
+            is False
+        )
+
+    scenario(tmp_path, body)
+
+
 def test_the_sidebar_keeps_the_width_the_user_gave_it(tmp_path):
     width = "document.getElementById('sidebar').getBoundingClientRect().width"
 

@@ -79,8 +79,12 @@ def record_trust() -> None:
     path.write_text(json.dumps({"projects": projects}), encoding="utf-8")
 
 
-def pass_trust_screen() -> bool:
-    """As the real agents: nothing is reported until it is answered, and `no` leaves."""
+def pass_trust_screen(reports: bool) -> bool:
+    """As Claude Code 2.1.332: the screen reports itself as `blocked` to a terminal that
+    answered the status query, and `no` leaves."""
+    if reports:
+        # base64 of "trust this folder", as the real one sends it.
+        status("blocked:kind=permission:msg=dHJ1c3QgdGhpcyBmb2xkZXI=")
     emit("Is this a project you trust? (yes/no)\r\n")
     if sys.stdin.readline().strip() != "yes":
         status("clear")
@@ -100,14 +104,15 @@ def compose() -> None:
 def main() -> int:
     record_launch()
     emit(f"{ESC}]0;fake session{ESC}\\")
-    if not query_supported():
+    supported = query_supported()
+    if not supported:
         emit("no status support\r\n")
     if not is_trusted():
         if "--worktree" in sys.argv[1:]:
             # `claude -w` refuses rather than asking; the text is Claude Code 2.1.318's.
             emit("Error creating worktree: Workspace trust not yet accepted.\r\n")
             return 1
-        if not pass_trust_screen():
+        if not pass_trust_screen(supported):
             return 1
     status("idle")
     emit("fake agent ready\r\n")

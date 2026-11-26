@@ -1341,6 +1341,62 @@ async def test_accepting_trust_loops_back_to_the_worktree(rig):
     assert rig.tabs()[0]["awaiting_trust"] is False
 
 
+# What Claude Code 2.1.332 reports while its trust screen is up, captured under a PTY.
+TRUST_SCREEN = "blocked:app=claude-code:kind=permission:msg=dHJ1c3QgdGhpcyBmb2xkZXI="
+
+
+@run
+async def test_the_trust_screen_reporting_itself_is_not_an_answer(rig):
+    """Taken for acceptance, it relaunched `claude -w` before the user could answer, and
+    Claude refused with `Workspace trust not yet accepted`."""
+    rig.make_repository()
+    distrust(rig)
+    await rig.hello()
+    tab = await rig.create(worktree=True)
+    await rig.output(tab["id"], status(TRUST_SCREEN))
+    await asyncio.sleep(0.05)
+    assert len(rig.processes) == 1
+    assert rig.tabs()[0]["awaiting_trust"] is True
+
+
+@run
+async def test_accepting_after_the_trust_screen_reported_itself_loops_back(rig):
+    rig.make_repository()
+    distrust(rig)
+    await rig.hello()
+    tab = await rig.create(worktree=True)
+    await rig.output(tab["id"], status(TRUST_SCREEN))
+    await rig.output(tab["id"], status("idle"))
+    await settle(lambda: len(rig.processes) == 2)
+    assert "'--worktree'" in rig.processes[1].command()
+    assert rig.tabs()[0]["awaiting_trust"] is False
+
+
+@run
+async def test_declining_after_the_trust_screen_reported_itself_stays_put(rig):
+    rig.make_repository()
+    distrust(rig)
+    await rig.hello()
+    tab = await rig.create(worktree=True)
+    await rig.output(tab["id"], status(TRUST_SCREEN))
+    await rig.output(tab["id"], status("clear"))
+    await asyncio.sleep(0.05)
+    assert len(rig.processes) == 1
+    assert rig.tabs()[0]["awaiting_trust"] is False
+    output = "".join(m["data"] for m in rig.messages if m["type"] == "output")
+    assert "wasn't trusted" in output
+
+
+@run
+async def test_a_plain_tab_stays_on_its_trust_screen_while_it_reports_itself(rig):
+    distrust(rig)
+    await rig.hello()
+    tab = await rig.create()
+    await rig.output(tab["id"], status(TRUST_SCREEN))
+    await asyncio.sleep(0.05)
+    assert rig.tabs()[0]["awaiting_trust"] is True
+
+
 @run
 async def test_the_plain_process_ends_when_the_worktree_replaces_it(rig):
     rig.make_repository()

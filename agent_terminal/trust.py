@@ -7,7 +7,8 @@ Seen from Claude Code 2.1.332 and Codex 0.166:
              slashes. Trust covers subfolders, but not across a repository: a repository
              under a trusted folder is asked about again, by plain `claude` and `-w`
              alike. `claude -w` in an untrusted folder exits 1 rather than asking, which
-             is why `runner.py` has a step for it.
+             is why `runner.py` has a step for it. Plain `claude` on the trust screen
+             reports `state=blocked:kind=permission`, so that is not yet an answer.
     Codex    `[projects.'<lowercase path>'] trust_level = "trusted"` in `config.toml`, on
              the repository root. `codex --worktree` asks for itself.
 """

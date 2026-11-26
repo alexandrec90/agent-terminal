@@ -1,6 +1,7 @@
 """The real thing, end to end: the installed package writing to a real Windows console.
 
-Marked `local`, so only `scripts/e2e.py` runs it: the gate is Linux and has no console. The
+Marked `ci_e2e`, so only `scripts/e2e.py --ci` runs it, on the `windows-latest` runner of
+`PR Gate`'s `E2E` job: the other jobs are Linux and have no console. The
 product is a Windows terminal, and the package has no entry point yet, so `PROBE` stands in
 for one. It starts where a user's shell would, from the installed package in a console of
 its own and outside the checkout, prints a line, and reads that line back off the screen
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.local
+pytestmark = pytest.mark.ci_e2e
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCH_TIMEOUT_SECONDS = 60

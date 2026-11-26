@@ -143,3 +143,58 @@ jobs:
         env:
           DEVKIT_DIR: ${{ github.workspace }}/.devkit-src
         run: python scripts/sync-devkit.py --check
+
+  e2e:
+    name: E2E
+    # The default branch only: PRs merge without waiting for a gate, so a PR run of this
+    # would decide nothing. After the drift job, whatever it said, so a push run does not
+    # take one more runner at once. A burst of merges collapses to the newest commit; the
+    # older run's conclusion is then `cancelled`, which the fix trigger reads as no verdict
+    # rather than a red. A red here is a red `PR Gate` on the default branch, which is what
+    # the fix pass reads.
+    needs: devkit-drift
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    # Windows, because the tier is Windows itself: the real window over WebView2, ConPTY,
+    # a console of its own, the shell's window properties, SHFileOperationW. The hosted
+    # runner has an interactive desktop, PowerShell 7 and git; nothing here reads the PC.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-e2e-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      # What devkit's scheduler sets: under it a skip in the tier is a failure.
+      DEVKIT_E2E: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+      - name: Make sure the WebView2 runtime is installed
+        # pywebview draws the window in WebView2. The runner image normally carries it
+        # with Edge; if an image ever does not, install the Evergreen runtime rather than
+        # let every window test fail on a missing renderer.
+        shell: pwsh
+        run: |
+          $client = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys = @(
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$client",
+            "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$client"
+          )
+          if ($keys | Where-Object { Test-Path $_ }) {
+            Write-Output 'WebView2 runtime present'
+          } else {
+            $setup = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $setup
+            Start-Process $setup -ArgumentList '/silent', '/install' -Wait
+            Write-Output 'WebView2 runtime installed'
+          }
+      - name: End-to-end tier
+        run: uv run python scripts/e2e.py --ci
+      - name: Upload e2e artifact
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-failures
+          path: logs/e2e-junit.xml
+          if-no-files-found: ignore

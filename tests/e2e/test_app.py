@@ -1,6 +1,8 @@
 """The real window, through the same mouse paths as the user, with a stand-in agent.
 
-Needs a Windows desktop, so `addopts` deselects it and `scripts/e2e.py` runs it.
+Needs a Windows desktop with WebView2, so `addopts` deselects it and `scripts/e2e.py --ci`
+runs it, in `PR Gate`'s `E2E` job on `windows-latest`. Nothing here reads this PC: the
+projects, agents, `gh` and every agent's home are temp folders and stand-ins.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from fake_agent import PROMPT
 
 from agent_terminal import clipboard
 
-pytestmark = pytest.mark.local
+pytestmark = pytest.mark.ci_e2e
 
 Scenario = Callable[[App, Window], Awaitable[None]]
 

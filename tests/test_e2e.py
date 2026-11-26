@@ -1,10 +1,12 @@
-"""`scripts/e2e.py`: the local end-to-end tier and the contract the nightly job reads."""
+"""`scripts/e2e.py`: the end-to-end tiers (`local`, and `ci_e2e` under `--ci`) and the
+contract the nightly job and the `E2E` gate job read."""
 
 from __future__ import annotations
 
 import importlib.util
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -254,14 +256,78 @@ def collected(*args: str) -> str:
     return done.stdout
 
 
-TIER = ("tests/test_local_console.py::", "tests/e2e/test_app.py::")
+TIER = (
+    "tests/test_local_console.py::",
+    "tests/e2e/test_app.py::",
+    "tests/test_processes.py::test_a_real_child_is_found_with_its_start_time",
+    "tests/test_recycle.py::test_delete_refusal_asks_windows_and_deletes_nothing",
+    "tests/test_taskbar.py::test_the_shell_keeps_what_is_written_on_a_real_window",
+)
 
 
 def test_the_default_run_deselects_the_tier_and_the_script_s_selection_reaches_it():
     default = collected()
-    selected = collected("-m", e2e.MARKER)
+    selected = collected("-m", e2e.CI_MARKER)
     for tier in TIER:
         assert tier not in default
         assert tier in selected
     assert "tests/test_package_data.py::" in default
     assert "tests/test_package_data.py::" not in selected
+
+
+def test_no_test_is_left_in_the_local_tier():
+    """Every Windows test runs in CI; `local` is for what needs this PC, and none does."""
+    assert "::" not in collected("-m", e2e.MARKER)
+
+
+def test_no_local_test_left_means_the_project_declares_its_tier_runs_in_ci():
+    # The nightly job on the PC would otherwise run `-m local`, find nothing and go red.
+    config = tomllib.loads((REPO_ROOT / ".devkit.toml").read_text(encoding="utf-8"))
+    assert config["delivery"]["e2e"] == "ci"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        ([], ("local", [])),
+        (["tests/t.py::a"], ("local", ["tests/t.py::a"])),
+        (["--ci"], ("ci_e2e", [])),
+        (["tests/t.py::a", "--ci"], ("ci_e2e", ["tests/t.py::a"])),
+    ],
+)
+def test_split_args_reads_the_ci_flag_and_keeps_the_named_tests(argv, expected):
+    assert e2e.split_args(argv) == expected
+
+
+def test_the_ci_tier_is_selected_by_its_own_marker():
+    argv = e2e.pytest_argv("py", Path("r.xml"), (), e2e.CI_MARKER)
+    assert argv[5] == "ci_e2e"
+    assert "local" not in argv
+
+
+def test_an_empty_ci_run_names_its_marker():
+    code, lines = e2e.verdict(0, [], strict=True, marker=e2e.CI_MARKER)
+    assert code == 1
+    assert lines[-1] == "e2e: no ci_e2e test executed, which is not a pass"
+
+
+def test_main_under_ci_selects_the_ci_tier(checkout, monkeypatch):
+    monkeypatch.setenv(e2e.ENV_FLAG, "1")
+    junit = '<testsuite><testcase classname="tests.test_a" name="test_x"/></testsuite>'
+    seen: dict[str, object] = {}
+    assert e2e.main(["--ci"], run=fake_pytest(checkout, junit, 0, seen)) == 0
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[argv.index("-m", 2) + 1] == "ci_e2e"
+    assert "--ci" not in argv
+    assert "tests" in argv
+
+
+def test_the_gate_runs_the_ci_tier_on_windows_on_the_default_branch_only():
+    gate = (REPO_ROOT / ".github" / "workflows" / "pr-gate.yml").read_text(encoding="utf-8")
+    job = gate.split("\n  e2e:\n", 1)[1]
+    assert "needs: devkit-drift" in job
+    assert "github.event_name != 'pull_request'" in job
+    assert "runs-on: windows-latest" in job
+    assert 'DEVKIT_E2E: "1"' in job
+    assert "python scripts/e2e.py --ci" in job

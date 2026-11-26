@@ -48,12 +48,14 @@ testpaths = ["tests/"]
 # No `-q` in `addopts`: an agent adds its own, and `-qq` drops the "N passed" line.
 # `-p devkit_temproot` is the vendored plugin giving each run a temp root of its own, so a
 # run elsewhere on the machine cannot fail this one at exit; `pythonpath` is where it lives.
-# `-m "not local"` keeps the tier only this workstation can run out of every run but
-# `scripts/e2e.py`, whose own `-m local` comes later and so wins.
-addopts = '-m "not local" -p devkit_temproot'
+# `-m "not local and not ci_e2e"` keeps both end-to-end tiers out of every run but
+# `scripts/e2e.py`'s, whose own `-m local` (or `-m ci_e2e` under `--ci`) comes later and
+# so wins.
+addopts = '-m "not local and not ci_e2e" -p devkit_temproot'
 pythonpath = ["scripts/pytest-plugins"]
 markers = [
   "local: needs this workstation, not a runner; run nightly by scripts/e2e.py",
+  "ci_e2e: needs Windows itself, not this PC; run by scripts/e2e.py --ci in PR Gate's E2E job on windows-latest",
 ]
 
 [tool.mypy]

@@ -1,0 +1,27 @@
+# The job session 00656729 left its person (devkit ledger 035e39c5): "close and reopen the
+# window once by hand", so the running window picks up #55 (713c4ef), whose update check
+# counts from the commit the app started on. A window started before that merge still runs
+# the old check, which never offers an update, so it can never update itself onto the fix.
+# Overnight, local time (UTC-05:00 in winter, so the window is 04:00-06:00 in summer), when
+# a restart interrupts nobody typing. `every-machine`: the app may be open on any PC.
+when = "inside:03:00-05:00 UTC-05:00"
+on = "every-machine"
+agent = """
+Restart this PC's Agent Terminal window once, if it still runs code from before commit
+713c4ef (#55, merged 2026-11-26T02:07:58Z), so its update button works from then on.
+
+1. Find the window: the `agent-terminal.exe` process started from this PC's
+   agent-terminal checkout (`.venv\\Scripts\\agent-terminal.exe`). If none runs, or it was
+   started after 2026-11-26T02:07:58Z, there is nothing to do: say so in the intent.
+2. Check the checkout's main contains 713c4ef (`git merge-base --is-ancestor 713c4ef HEAD`);
+   if not, `git pull --ff-only origin main` first, which is what the app's own update runs.
+3. End only the window process, not the session host (`python -m agent_terminal.host`):
+   the host outlives a window that did not close itself and keeps every agent for an hour
+   for the next launch to take back (README, "the session host"). Closing the window
+   normally would end the host and every agent with it, so do not send it a close.
+4. Start `.venv\\Scripts\\agent-terminal.exe` again from the checkout, detached, and check
+   that it is running and that the host's agents are still alive (`host.log` in
+   %LOCALAPPDATA%\\AgentTerminal says the new window attached).
+
+Delete nothing, and stop no process but that one window.
+"""

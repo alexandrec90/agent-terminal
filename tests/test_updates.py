@@ -19,6 +19,7 @@ from agent_terminal.updates import (
     installed_from,
     read_update_result,
     source_checkout,
+    started_commit,
 )
 
 
@@ -31,6 +32,7 @@ class Git:
             "count-behind": "3",
             "count-ahead": "0",
             "branch": "main",
+            "head": "a1b2c3",
             "status": "",
             **answers,
         }
@@ -40,9 +42,9 @@ class Git:
         self.calls.append(argv)
         args = argv[1:]
         if args[0] == "rev-list":
-            key = "count-behind" if args[-1].startswith("HEAD..") else "count-ahead"
+            key = "count-ahead" if args[-1].endswith("..HEAD") else "count-behind"
         elif args[0] == "rev-parse":
-            key = "branch"
+            key = "branch" if "--abbrev-ref" in args else "head"
         else:
             key = args[0]
         answer = self.answers[key]
@@ -52,14 +54,45 @@ class Git:
 
 
 def test_behind_and_free_to_update(tmp_path):
-    status = check_for_update(tmp_path, "main", Git())
+    status = check_for_update(tmp_path, "main", run=Git())
     assert status == UpdateStatus(behind=3, checked=True)
 
 
 def test_the_fetch_asks_for_the_branch_alone(tmp_path):
     run = Git()
-    check_for_update(tmp_path, "main", run)
+    check_for_update(tmp_path, "main", run=run)
     assert run.calls[0] == ["git", "fetch", "--quiet", "origin", "main"]
+
+
+def test_behind_counts_from_the_commit_the_app_started_on(tmp_path):
+    """`land.py` fast-forwards the checkout the moment a PR merges, so HEAD is level with
+    origin while the window still runs the code it started with."""
+    run = Git()
+    check_for_update(tmp_path, "main", "a1b2c3", run=run)
+    assert ["git", "rev-list", "--count", "a1b2c3..origin/main"] in run.calls
+    assert ["git", "rev-list", "--count", "HEAD..origin/main"] not in run.calls
+
+
+def test_behind_counts_from_head_when_the_start_is_unknown(tmp_path):
+    run = Git()
+    check_for_update(tmp_path, "main", "", run=run)
+    assert ["git", "rev-list", "--count", "HEAD..origin/main"] in run.calls
+
+
+def test_the_blockers_still_read_the_checkout_itself(tmp_path):
+    run = Git()
+    check_for_update(tmp_path, "main", "a1b2c3", run=run)
+    assert ["git", "rev-list", "--count", "origin/main..HEAD"] in run.calls
+
+
+def test_started_commit_is_the_checkout_head(tmp_path):
+    run = Git()
+    assert started_commit(tmp_path, run) == "a1b2c3"
+    assert run.calls == [["git", "rev-parse", "HEAD"]]
+
+
+def test_started_commit_that_git_cannot_read_is_empty(tmp_path):
+    assert started_commit(tmp_path, Git(head=128)) == ""
 
 
 @pytest.mark.parametrize(
@@ -71,13 +104,13 @@ def test_the_fetch_asks_for_the_branch_alone(tmp_path):
     ],
 )
 def test_a_checkout_that_cannot_fast_forward_says_why(tmp_path, answers, reason):
-    status = check_for_update(tmp_path, "main", Git(**answers))
+    status = check_for_update(tmp_path, "main", run=Git(**answers))
     assert reason in status.blocked
     assert status.behind == 3
 
 
 def test_a_failed_fetch_is_reported_not_raised(tmp_path):
-    status = check_for_update(tmp_path, "main", Git(fetch=128))
+    status = check_for_update(tmp_path, "main", run=Git(fetch=128))
     assert status.error == "fetch failed"
     assert status.checked
 
@@ -122,6 +155,7 @@ class Rig:
         self.status = UpdateStatus(behind=2, checked=True)
         self.refuse: Exception | None = None
         options.setdefault("checkout", tmp_path)
+        options.setdefault("head", lambda _checkout: "started")
         self.control = AppControl(
             self.settings,
             self.messages.append,
@@ -130,7 +164,12 @@ class Rig:
             self.restart,
             **options,
         )
-        self.control._check = lambda _checkout, _branch: self.status
+        self.checked_from: list[str] = []
+        self.control._check = self.check
+
+    def check(self, _checkout: Path, _branch: str, running: str) -> UpdateStatus:
+        self.checked_from.append(running)
+        return self.status
 
     def restart(self, update: bool, keep: bool) -> None:
         if self.refuse is not None:
@@ -160,6 +199,47 @@ async def test_the_status_tells_the_page_everything(rig):
     assert message["update"]["behind"] == 2
     assert message["sessions"] == {"kept": True, "stale": False}
     assert message["restarting"] is False
+
+
+@run
+async def test_every_check_counts_from_the_commit_read_at_start(rig):
+    await rig.control.check_now()
+    await rig.control.check_now()
+    assert rig.checked_from == ["started", "started"]
+
+
+def test_the_start_commit_is_read_once_as_the_app_starts(tmp_path):
+    reads: list[Path] = []
+
+    def head(checkout: Path) -> str:
+        reads.append(checkout)
+        return "started"
+
+    async def go() -> None:
+        rig = Rig(tmp_path, asyncio.get_running_loop(), head=head)
+        assert reads == [tmp_path]
+        await rig.control.check_now()
+        assert reads == [tmp_path], "HEAD moves on; the start commit does not"
+
+    asyncio.run(go())
+
+
+def test_without_a_checkout_no_start_commit_is_read(tmp_path):
+    def head(_checkout: Path) -> str:
+        raise AssertionError("there is no checkout to read")
+
+    async def go() -> None:
+        AppControl(
+            Settings(data_dir=tmp_path),
+            lambda _message: None,
+            asyncio.get_running_loop(),
+            dict,
+            lambda *_: None,
+            source=lambda: None,
+            head=head,
+        )
+
+    asyncio.run(go())
 
 
 @run
@@ -251,6 +331,7 @@ def test_a_checkout_never_looks_for_its_install(tmp_path):
             lambda *_: None,
             checkout=tmp_path,
             source=source,
+            head=lambda _checkout: "",
         )
 
     asyncio.run(go())

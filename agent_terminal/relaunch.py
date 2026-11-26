@@ -130,6 +130,13 @@ def head_commit(checkout: Path, run: Run = subprocess.run) -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
+def update_detail(before: str, after: str) -> str:
+    """What a successful update says. The pull often has nothing to do, as `land.py`
+    fast-forwards this checkout on every merge; the restart is still what brings the
+    window onto that commit."""
+    return f"{before} → {after}" if before != after else f"now running {after}"
+
+
 def relaunch_argv(python: str) -> list[str]:
     """How the app is started again."""
     return [python, "-m", "agent_terminal"]
@@ -167,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         before = head_commit(args.checkout)
         result = apply_update(args.checkout, settings.update_branch, settings.update_log_file)
         after = head_commit(args.checkout)
-        detail = result.detail if not result.ok else f"{before} → {after}"
+        detail = result.detail if not result.ok else update_detail(before, after)
         record = {**asdict(result), "detail": detail, "log": str(settings.update_log_file)}
         settings.update_result_file.write_text(json.dumps(record), encoding="utf-8")
         log.info("update %s: %s", "done" if result.ok else "failed", detail)

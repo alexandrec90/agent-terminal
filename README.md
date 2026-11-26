@@ -64,7 +64,9 @@ the window that comes back rebuilds each tab's screen from it.
 | `This copy of the app cannot update itself…` | It was installed as a copy (`uv tool install`, `pip install`), which has no checkout to pull. Run the `.venv\Scripts\agent-terminal.exe` it names instead |
 
 The app checks `origin/main` at start and every half hour, from the checkout it runs
-from. Closing the window still ends everything, host included. If the window crashes,
+from, and counts the commits since the one it *started* on. That checkout is often
+already up to date, since `land.py` fast-forwards it on every merge, but the window runs
+the code it started with until it restarts. Closing the window still ends everything, host included. If the window crashes,
 the host keeps the agents for an hour (`AGENT_TERMINAL_HOST_ORPHAN_SECONDS`) for the next
 launch to take back. If the host cannot start, the app runs the agents itself as it did
 before, and a restart ends them.

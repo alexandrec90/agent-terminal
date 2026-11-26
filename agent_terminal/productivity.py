@@ -6,6 +6,10 @@ kept in the data directory so only the latest are asked for. Days are local days
 
 What a machine did is not counted: a prompt the fix pass dispatched, or a PR that did not
 come from a session the user prompted, which is for `own_prs.py` to say.
+
+Each is also counted for its project: a prompt's by the folder it was typed in, a PR's by
+its repository's name. A worktree's prompts are its repository's, and so are a subfolder's
+under the projects root, so both name the project the way the sidebar's group does.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import astuple, dataclass, replace
 from datetime import date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from agent_terminal.desktop import Emit, Handler
@@ -68,6 +72,38 @@ def count_prompts(lines: Iterable[str]) -> Counter[date]:
     return counts
 
 
+def project_of(folder: str, root: str) -> str:
+    """The project a folder belongs to, lower-cased so a repository's name matches it: a
+    worktree's repository, else the folder under `root` it is in, else the folder itself."""
+    parts = [part.lower() for part in PureWindowsPath(folder).parts]
+    for index in range(len(parts) - 1):
+        if parts[index] == ".claude" and parts[index + 1] == "worktrees" and index:
+            parts = parts[:index]
+            break
+    under = [part.lower() for part in PureWindowsPath(root).parts]
+    if len(parts) > len(under) and parts[: len(under)] == under:
+        return parts[len(under)]
+    return parts[-1] if parts else ""
+
+
+def count_prompts_by_project(lines: Iterable[str], root: str) -> dict[str, Counter[date]]:
+    """Prompts per project and local day, skipping what `count_prompts` skips and any
+    record with no folder."""
+    counts: dict[str, Counter[date]] = {}
+    for line in lines:
+        try:
+            record = json.loads(line)
+            if not is_prompt(record["display"]):
+                continue
+            day = datetime.fromtimestamp(record["timestamp"] / 1000).date()
+            project = project_of(record["project"], root)
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError, OSError):
+            continue
+        if project:
+            counts.setdefault(project, Counter())[day] += 1
+    return counts
+
+
 # --- pull requests ---
 
 
@@ -99,6 +135,23 @@ def count_prs(prs: Iterable[CreatedPr]) -> Counter[date]:
     return Counter(
         datetime.fromisoformat(pr.created_at).astimezone().date() for pr in prs if pr.own
     )
+
+
+def repository_of(url: str) -> str:
+    """The repository's name in a PR's URL, lower-cased: https://github.com/owner/name/pull/1."""
+    parts = url.lower().split("/")
+    return parts[4] if len(parts) > 4 else ""
+
+
+def count_prs_by_project(prs: Iterable[CreatedPr]) -> dict[str, Counter[date]]:
+    """The user's own PRs per repository and local day."""
+    counts: dict[str, Counter[date]] = {}
+    for pr in prs:
+        project = repository_of(pr.url)
+        if pr.own and project:
+            day = datetime.fromisoformat(pr.created_at).astimezone().date()
+            counts.setdefault(project, Counter())[day] += 1
+    return counts
 
 
 def mark_own(prs: Mapping[str, CreatedPr], evidence: Evidence) -> dict[str, CreatedPr]:
@@ -175,29 +228,48 @@ def summarize(counts: Mapping[date, int], today: date) -> dict[str, Any]:
 
 
 def describe(
-    prompts: Mapping[date, int], prs: Mapping[date, int] | None, today: date
+    prompts: Mapping[date, int],
+    prs: Mapping[date, int] | None,
+    today: date,
+    project_prompts: Mapping[str, Mapping[date, int]] | None = None,
+    project_prs: Mapping[str, Mapping[date, int]] | None = None,
 ) -> dict[str, Any]:
-    """The whole message. `prs` is None until GitHub has answered once. A day before a
-    series' first is null, not zero: nothing was being recorded."""
+    """The whole message. `prs` and `project_prs` are None until GitHub has answered once.
+    A day before a series' first is null, not zero: nothing was being recorded. A
+    project's days span the totals', null where theirs are: recording is not per project."""
     first_prompts = min(prompts, default=today)
     first_prs = min(prs, default=today) if prs is not None else today
     first = min(first_prompts, first_prs, today)
-    days = []
-    for offset in range((today - first).days + 1):
-        day = first + timedelta(days=offset)
-        days.append(
-            {
-                "day": day.isoformat(),
-                "prompts": prompts.get(day, 0) if day >= first_prompts else None,
-                "prs": prs.get(day, 0) if prs is not None and day >= first_prs else None,
-            }
+
+    def series(
+        prompts: Mapping[date, int], prs: Mapping[date, int] | None
+    ) -> dict[str, Any]:
+        days = []
+        for offset in range((today - first).days + 1):
+            day = first + timedelta(days=offset)
+            days.append(
+                {
+                    "day": day.isoformat(),
+                    "prompts": prompts.get(day, 0) if day >= first_prompts else None,
+                    "prs": prs.get(day, 0) if prs is not None and day >= first_prs else None,
+                }
+            )
+        return {
+            "prompts": summarize(prompts, today),
+            "prs": summarize(prs, today) if prs is not None else None,
+            "days": days,
+        }
+
+    project_prompts = project_prompts or {}
+    names = sorted({*project_prompts, *(project_prs or {})})
+    projects = {
+        name: series(
+            project_prompts.get(name, {}),
+            project_prs.get(name, {}) if project_prs is not None else None,
         )
-    return {
-        "type": "productivity",
-        "prompts": summarize(prompts, today),
-        "prs": summarize(prs, today) if prs is not None else None,
-        "days": days,
+        for name in names
     }
+    return {"type": "productivity", **series(prompts, prs), "projects": projects}
 
 
 class Productivity:
@@ -218,6 +290,7 @@ class Productivity:
         self._today = today
         self._stamp: tuple[int, int] | None = None
         self._prompts: Counter[date] = Counter()
+        self._project_prompts: dict[str, Counter[date]] = {}
         self._prs: dict[str, CreatedPr] | None = None
         self._evidence = SessionEvidence(settings.claude_home)
         self._sent: dict[str, Any] | None = None
@@ -262,7 +335,10 @@ class Productivity:
             if stamp == self._stamp:
                 return
             with path.open(encoding="utf-8", errors="replace") as handle:
-                self._prompts = count_prompts(handle)
+                lines = handle.readlines()
+            self._prompts = count_prompts(lines)
+            root = str(self._settings.projects_root)
+            self._project_prompts = count_prompts_by_project(lines, root)
             self._stamp = stamp
         except FileNotFoundError:
             return
@@ -305,8 +381,11 @@ class Productivity:
 
     def _send(self) -> None:
         """Tell the page, if anything it shows has changed."""
-        prs = count_prs(self._prs.values()) if self._prs is not None else None
-        message = describe(self._prompts, prs, self._today())
+        prs = project_prs = None
+        if self._prs is not None:
+            prs = count_prs(self._prs.values())
+            project_prs = count_prs_by_project(self._prs.values())
+        message = describe(self._prompts, prs, self._today(), self._project_prompts, project_prs)
         if message != self._sent:
             self._sent = message
             self._emit(message)

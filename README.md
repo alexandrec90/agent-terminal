@@ -123,6 +123,12 @@ first (`agent_terminal/own_prs.py`); scheduled tasks, fixers and bots are left o
 is in neither count. The average is over days that had any, before today; the record can
 be today's.
 
+The graph's project picker shows the same for one project, each choice naming its counts
+for today, and a group's heading shows its project's prompts and PRs today, on a day it
+had any. A prompt belongs to the project it was typed in: a worktree's to its
+repository, a subfolder's to its folder under the projects root. A PR belongs to the
+project its repository is named after.
+
 ## How a tab knows
 
 No agent hook is involved. Both CLIs report their state to the terminal with an OSC 7501

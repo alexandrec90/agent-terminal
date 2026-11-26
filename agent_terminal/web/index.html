@@ -136,6 +136,7 @@
     <dialog id="productivity">
       <div class="productivity-head">
         <h2>Prompts and PRs per day</h2>
+        <select id="productivity-project" aria-label="Project shown"></select>
         <div id="productivity-ranges" role="group" aria-label="Days shown"></div>
         <button type="button" id="productivity-close" aria-label="Close" title="Close">×</button>
       </div>
@@ -147,7 +148,8 @@
       </details>
       <p class="productivity-note">
         Your own prompts, and the PRs that came from them: nothing automated, and nothing from
-        Codex. Averages are over days with any, before today.
+        Codex. Averages are over days with any, before today. A project's prompts are those
+        typed in its folder or its worktrees; its PRs, those in the repository of its name.
       </p>
     </dialog>
 

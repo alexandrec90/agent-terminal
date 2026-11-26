@@ -140,6 +140,7 @@ function render() {
     folded,
     hidden,
     kept,
+    today: (name) => productivity.today(name),
   };
   renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
@@ -213,6 +214,8 @@ function onMessage(message) {
       break;
     case "productivity":
       productivity.set(message);
+      // Each group's heading says its own counts for today.
+      render();
       break;
     default:
       console.warn("unknown message", message);

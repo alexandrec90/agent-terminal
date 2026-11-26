@@ -67,6 +67,19 @@ function barPath(x, y, width, height) {
   );
 }
 
+// The projects to pick from, busiest today first: `[name, label]` each.
+export function projectChoices(projects) {
+  const today = (counts) => (counts.prompts?.today ?? 0) + (counts.prs?.today ?? 0);
+  return Object.entries(projects ?? {})
+    .sort(([a, x], [b, y]) => today(y) - today(x) || a.localeCompare(b))
+    .map(([name, counts]) => {
+      const prompts = counts.prompts.today;
+      const prs = counts.prs ? counts.prs.today : "–";
+      const s = (n) => (n === 1 ? "" : "s");
+      return [name, `${name}: ${prompts} prompt${s(prompts)} · ${prs} PR${s(prs)} today`];
+    });
+}
+
 function tipText(entry) {
   const lines = SERIES.map(([key, name]) => `${name}: ${entry[key] ?? "not recorded"}`);
   return [dayLabel(entry.day), ...lines].join("\n");
@@ -76,8 +89,15 @@ export class Productivity {
   constructor() {
     this.message = null;
     this.range = RANGES[0][0];
+    // "" is every project.
+    this.project = "";
     this.tally = document.getElementById("tally");
     this.dialog = document.getElementById("productivity");
+    this.picker = document.getElementById("productivity-project");
+    this.picker.addEventListener("change", () => {
+      this.project = this.picker.value;
+      this.renderDialog();
+    });
     this.ranges = document.getElementById("productivity-ranges");
     this.summary = document.getElementById("productivity-summary");
     this.chart = document.getElementById("productivity-chart");
@@ -104,6 +124,13 @@ export class Productivity {
     if (this.dialog.open) this.renderDialog();
   }
 
+  // A sidebar group's counts for today, by its name: `{prompts, prs}`, or null with none.
+  today(name) {
+    const counts = this.message?.projects?.[name.toLowerCase()];
+    if (!counts) return null;
+    return { prompts: counts.prompts.today, prs: counts.prs ? counts.prs.today : null };
+  }
+
   open() {
     this.dialog.showModal();
     this.renderDialog();
@@ -123,18 +150,37 @@ export class Productivity {
     this.tally.hidden = false;
   }
 
+  // The counts shown: every project's, or the one picked while it has any.
+  shown() {
+    return this.message.projects?.[this.project] ?? this.message;
+  }
+
+  renderPicker() {
+    const choices = [["", "All projects"], ...projectChoices(this.message.projects)];
+    if (!choices.some(([name]) => name === this.project)) this.project = "";
+    this.picker.replaceChildren(
+      ...choices.map(([name, label]) => {
+        const option = element("option", "", label);
+        option.value = name;
+        return option;
+      }),
+    );
+    this.picker.value = this.project;
+  }
+
   renderDialog() {
     for (const button of this.ranges.children) {
       button.setAttribute("aria-pressed", String(Number(button.dataset.days) === this.range));
     }
-    const days = this.message.days.slice(-Math.min(this.range, this.message.days.length));
-    this.summary.replaceChildren(...SERIES.map(([key, name]) => this.legend(key, name)));
+    this.renderPicker();
+    const shown = this.shown();
+    const days = shown.days.slice(-Math.min(this.range, shown.days.length));
+    this.summary.replaceChildren(...SERIES.map(([key, name]) => this.legend(shown[key], key, name)));
     this.renderChart(days);
     this.renderTable(days);
   }
 
-  legend(key, name) {
-    const summary = this.message[key];
+  legend(summary, key, name) {
     const node = element("div", "");
     node.append(element("span", `legend-name ${key}`, name));
     let text = "waiting for GitHub";
@@ -148,7 +194,8 @@ export class Productivity {
 
   renderChart(days) {
     const root = svg("svg", { viewBox: `0 0 ${WIDTH} ${HEIGHT}`, role: "img" });
-    root.setAttribute("aria-label", "Prompts and PRs per day");
+    const of = this.project ? ` in ${this.project}` : "";
+    root.setAttribute("aria-label", `Prompts and PRs per day${of}`);
     const values = days.flatMap((entry) => SERIES.map(([key]) => entry[key] ?? 0));
     const marks = ticks(Math.max(...values));
     const top = marks.at(-1);

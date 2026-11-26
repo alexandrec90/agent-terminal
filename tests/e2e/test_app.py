@@ -1060,8 +1060,48 @@ def test_the_tally_counts_today_and_opens_the_graph(tmp_path):
         await window.click("#tally")
         await window.wait("document.getElementById('productivity').open", "the graph")
         assert await window.js("document.querySelectorAll('.chart-bar').length") == 2
+        # Both the prompts, typed in r's worktree, and the PR, in o/r, are r's.
+        options = "[...document.querySelectorAll('#productivity-project option')]"
+        labels = await window.js(f"{options}.map((n) => n.textContent)")
+        assert labels == ["All projects", "r: 2 prompts · 1 PR today"]
+        await window.js(
+            "(() => { const p = document.getElementById('productivity-project');"
+            "p.value = 'r'; p.dispatchEvent(new Event('change')); })()"
+        )
+        assert await window.js("document.querySelectorAll('.chart-bar').length") == 2
         await window.click("#productivity-close")
         await window.wait("!document.getElementById('productivity').open", "the graph to close")
+
+    scenario(tmp_path, body)
+
+
+def test_a_group_heading_counts_its_projects_day(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        await open_tab(window, "alpha")
+        now = datetime.now().astimezone()
+        home = app.base / "claude-home"
+        home.mkdir(exist_ok=True)
+        worktree = str(app.projects / "alpha" / ".claude" / "worktrees" / "mine")
+        # The third is typed in the projects root itself, so it is no project's but its own.
+        typed = (("a", worktree), ("b", worktree), ("c", str(app.projects)))
+        records = [
+            {
+                "display": text,
+                "timestamp": now.timestamp() * 1000 - 1,
+                "project": folder,
+                "sessionId": "s",
+            }
+            for text, folder in typed
+        ]
+        lines = "".join(json.dumps(record) + "\n" for record in records)
+        (home / "history.jsonl").write_text(lines, encoding="utf-8")
+        url = "https://github.com/o/alpha/pull/7"
+        write_prs(app, make_pr(7, "worktree-mine", url=url, createdAt=now.isoformat()))
+        badge = '[data-project="alpha"] .group-today span'
+        counts = f"[...document.querySelectorAll('{badge}')].map((n) => n.textContent).join()"
+        await window.wait(f"{counts} === '2,1'", "alpha's prompts and PRs today")
+        title = "document.querySelector('[data-project=\"alpha\"] .group-today').title"
+        assert await window.js(title) == "Today in alpha: 2 prompts and 1 PR"
 
     scenario(tmp_path, body)
 

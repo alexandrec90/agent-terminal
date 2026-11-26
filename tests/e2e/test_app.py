@@ -413,6 +413,24 @@ def test_the_sidebar_keeps_the_width_the_user_gave_it(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_a_cut_tab_title_shows_in_full_on_hover(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        tab_id = await open_tab(window, "alpha")
+        title = f"document.querySelector('[data-id=\"{tab_id}\"] .tab-title')"
+        hover = f"{title}.dispatchEvent(new MouseEvent('mouseenter'))"
+
+        # A title that fits leaves the row's own hint to show.
+        await window.js(hover)
+        assert await window.js(f"{title}.hasAttribute('title')") is False
+
+        long = "long title " * 40
+        await window.js(f"{title}.textContent = {json.dumps(long)}")
+        await window.js(hover)
+        assert await window.js(f"{title}.title") == long
+
+    scenario(tmp_path, body)
+
+
 def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
     async def body(_app: App, window: Window) -> None:
         tab = await open_tab(window, "alpha")

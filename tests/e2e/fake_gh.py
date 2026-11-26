@@ -104,7 +104,23 @@ def repo(argv: list[str]) -> int:
     return 2
 
 
+def api(args: list[str]) -> int:
+    """The search for the user's own PRs: those whose record says when they were opened."""
+    if args[:1] != ["graphql"]:
+        print(f"fake gh does not know api {args}", file=sys.stderr)
+        return 2
+    nodes = [
+        {name: r[name] for name in ("url", "createdAt", "headRefName")}
+        for r in load()
+        if "createdAt" in r
+    ]
+    print(json.dumps({"data": {"search": {"nodes": nodes}}}))
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv[:1] == ["api"]:
+        return api(argv[1:])
     if argv[:1] == ["repo"]:
         return repo(argv[1:])
     if argv[:1] != ["pr"]:

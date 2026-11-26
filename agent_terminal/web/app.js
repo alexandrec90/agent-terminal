@@ -2,6 +2,7 @@ import { AppBar } from "./appbar.js";
 import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
+import { Productivity } from "./productivity.js";
 import { ReviewPanel } from "./review.js";
 import { refreshTimes, renderSidebar } from "./sidebar.js";
 import { SidebarWidth } from "./sidebar-width.js";
@@ -16,6 +17,8 @@ let groupOrder = [];
 let activeId = null;
 let folded = new Set();
 let hidden = new Set();
+// Groups that stay with no tab in them, `{path, name}` each.
+let kept = [];
 let synced = false;
 let appStatus = null;
 // Mid-drag, a redraw would take the dragged row away: hold it until the drop.
@@ -60,6 +63,7 @@ const actions = {
   newInFolder: (entry) => dialog.open({ path: entry.path, name: entry.name }),
   toggleGroup: (path) => send({ type: "fold_group", path, folded: !folded.has(path) }),
   closeGroup,
+  land: (id) => send({ type: "land", id }),
   review: (pr) => {
     // Out of the terminal underneath, or typing here would reach its agent unseen.
     document.activeElement?.blur();
@@ -79,6 +83,8 @@ const dialog = new NewTabDialog({
   clone: (fullName) => send({ type: "clone_repo", full_name: fullName }),
   describeDeletion: (path) => send({ type: "describe_deletion", path }),
   deleteProject: (path) => send({ type: "delete_project", path }),
+  listPresets: () => send({ type: "list_presets" }),
+  newProject: (choice) => send({ type: "new_project", ...choice }),
 });
 
 const review = new ReviewPanel(document.getElementById("review"), {
@@ -97,9 +103,12 @@ const appBar = new AppBar(document.getElementById("app-bar"), {
   restart: (choice) => send({ type: "app_restart", ...choice }),
 });
 
+const productivity = new Productivity();
+
 const send = connect(onMessage, () => {
   send({ type: "hello", ...terminals.dimensions() });
   send({ type: "app_status" });
+  send({ type: "productivity" });
 });
 const terminals = new Terminals(document.getElementById("terminals"), {
   send,
@@ -125,7 +134,13 @@ function linkedTab() {
 function render() {
   renderHeld = dragging;
   if (dragging) return;
-  const view = { activeId: review.pr ? null : activeId, reviewing: review.pr, folded, hidden };
+  const view = {
+    activeId: review.pr ? null : activeId,
+    reviewing: review.pr,
+    folded,
+    hidden,
+    kept,
+  };
   renderSidebar(groups, tabs, prs, view, actions, groupOrder);
   review.setLinkedTab(linkedTab());
   empty.hidden = tabs.length > 0 || review.pr !== null;
@@ -144,6 +159,7 @@ function applyState(state) {
   groupOrder = state.group_order ?? [];
   folded = new Set(state.folded);
   hidden = new Set(state.hidden);
+  kept = state.kept ?? [];
   sidebarWidth.set(state.sidebar_width ?? null);
   if (state.active_id !== activeId) review.close();
   activeId = state.active_id;
@@ -161,6 +177,9 @@ const dialogMessages = {
   cloned: (message) => dialog.remote.setCloned(message),
   deletion: (message) => dialog.setDeletion(message),
   deleted: (message) => dialog.setDeleted(message),
+  presets: (message) => dialog.newProject.setPresets(message),
+  new_project_output: (message) => dialog.newProject.addLine(message.line),
+  new_project_done: (message) => dialog.newProject.setDone(message),
 };
 
 function onMessage(message) {
@@ -192,6 +211,9 @@ function onMessage(message) {
       appStatus = message;
       appBar.set(message);
       break;
+    case "productivity":
+      productivity.set(message);
+      break;
     default:
       console.warn("unknown message", message);
   }
@@ -213,4 +235,5 @@ setInterval(() => refreshTimes(groups), TIME_REFRESH_MS);
 
 document.getElementById("new-group").addEventListener("click", () => dialog.open());
 document.getElementById("empty-new").addEventListener("click", () => dialog.open());
+document.getElementById("productivity").addEventListener("close", () => terminals.focusActive());
 document.getElementById("new-tab").addEventListener("close", () => terminals.focusActive());

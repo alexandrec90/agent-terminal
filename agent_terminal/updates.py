@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import json
 import logging
 import os
@@ -19,6 +20,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from agent_terminal.desktop import Emit, Handler
 from agent_terminal.settings import Settings
@@ -52,6 +55,37 @@ def app_checkout(root: Path = APP_ROOT) -> Path | None:
     """The checkout the app runs from, or None if it was installed some other way. A
     worktree's `.git` is a file, so either counts."""
     return root if (root / ".git").exists() else None
+
+
+def source_checkout(direct_url: str | None) -> Path | None:
+    """The checkout a copy was installed from (`uv tool install <dir>`, `pip install
+    <dir>`), read from its `direct_url.json`, when that folder is still a checkout."""
+    try:
+        url = json.loads(direct_url or "").get("url", "")
+    except (ValueError, AttributeError):
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        return None
+    return app_checkout(Path(url2pathname(parsed.path)))
+
+
+def installed_from() -> Path | None:
+    """`source_checkout` for the copy of the app that is running."""
+    try:
+        dist = importlib.metadata.distribution("agent-terminal")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return source_checkout(dist.read_text("direct_url.json"))
+
+
+def cannot_update(source: Path | None) -> str:
+    """Why a copy that is not a checkout never offers an update, and what to run
+    instead. Without it the bar stays empty and the copy looks up to date for good."""
+    said = "This copy of the app cannot update itself: it is not running from a git checkout."
+    if source is None:
+        return f"{said} Run it from a checkout's .venv instead."
+    return f"{said} Run {source / '.venv' / 'Scripts' / 'agent-terminal.exe'} instead."
 
 
 def git_env() -> dict[str, str]:
@@ -125,8 +159,11 @@ class AppControl:
         sessions_status: Callable[[], dict[str, Any]],
         restart: Restart,
         checkout: Path | None = None,
+        source: Callable[[], Path | None] = installed_from,
     ) -> None:
         self._settings = settings
+        # Said once, at start: a copy outside a checkout stays that way until relaunched.
+        self._cannot_update = "" if checkout is not None else cannot_update(source())
         self._emit = emit
         self._loop = loop
         self._sessions_status = sessions_status
@@ -175,6 +212,7 @@ class AppControl:
             {
                 "type": "app",
                 "update": asdict(self._update) if self._checkout else None,
+                "cannot_update": self._cannot_update,
                 "sessions": self._sessions_status(),
                 "notice": self._notice,
                 "restarting": self._restarting,

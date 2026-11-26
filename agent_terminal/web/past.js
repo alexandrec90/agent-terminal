@@ -72,9 +72,14 @@ export function renderPastSession(session, now, resume) {
   return row;
 }
 
+// The list's box keeps one height whatever it holds (see #resume-list), so nothing below it
+// moves under the pointer when the sessions arrive.
 export function renderPastSessions(container, sessions, now, resume) {
+  container.setAttribute("aria-busy", String(sessions === null));
   if (sessions === null) {
-    container.replaceChildren(span("past-note", "Looking for sessions…"));
+    const note = span("past-note past-loading", "");
+    note.append(icon("working"), "Looking for sessions…");
+    container.replaceChildren(note);
     return;
   }
   if (sessions.length === 0) {

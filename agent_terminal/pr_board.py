@@ -13,21 +13,26 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agent_terminal import agents, gitinfo, shipping
+from agent_terminal.delivery import DeliveryReader, Progress
 from agent_terminal.folders import display_name
 from agent_terminal.projects import list_projects
 from agent_terminal.prompts import Prompt, find_prompt
-from agent_terminal.prs import MERGED, Gh, GhError, GhMissing, PullRequest
+from agent_terminal.prs import Gh, GhError, GhMissing, PullRequest, is_settled
 from agent_terminal.settings import Settings
 from agent_terminal.store import Tab
+from agent_terminal.updates import APP_ROOT
 
 log = logging.getLogger(__name__)
 
 LOCAL_SCAN_SECONDS = 5.0
+# Runs git in every tab's tree, so not as often as the files are read.
+DELIVERY_SECONDS = 15.0
 GH_CONCURRENCY = 4
 # A tab on these is working on the trunk, and a lookup for a PR headed by it finds nothing.
 TRUNK_BRANCHES = frozenset({"main", "master"})
@@ -86,6 +91,8 @@ class PrBoard:
         self._by_branch: dict[tuple[Path, str], PullRequest] = {}
         self._prompts: dict[tuple[Path, int], OpenPrompt] = {}
         self._facts: dict[str, TabFacts] = {}
+        self._delivery = DeliveryReader(settings.devkit_root, APP_ROOT)
+        self._progress: dict[str, Progress] = {}
         self._complained: set[str] = set()
         self._gh_missing = False
         self._task: asyncio.Task[None] | None = None
@@ -97,7 +104,13 @@ class PrBoard:
         facts = self._facts.get(tab.id, TabFacts())
         found = self.pr_for(facts.repository, facts.branch)
         pr = {**found.to_dict(), "repo": str(facts.repository)} if found else None
-        return {"ship": facts.ship, "branch": facts.branch, "pr": pr}
+        progress = asdict(self._progress.get(tab.id, Progress()))
+        return {"ship": facts.ship, "branch": facts.branch, "pr": pr, **progress}
+
+    def pr_of_tab(self, tab_id: str) -> PullRequest | None:
+        """The PR a tab's branch heads, as last known."""
+        facts = self._facts.get(tab_id, TabFacts())
+        return self.pr_for(facts.repository, facts.branch)
 
     def pr_for(self, repository: Path | None, branch: str | None) -> PullRequest | None:
         """The PR `branch` heads, as last known: open first, else merged or closed."""
@@ -146,14 +159,19 @@ class PrBoard:
             self._task.cancel()
 
     async def _watch(self) -> None:
-        until_poll = 0.0
+        until_poll = until_delivery = 0.0
         while True:
             if until_poll <= 0:
                 await self.refresh()
                 until_poll = self._settings.pr_poll_seconds
+                until_delivery = 0.0
             await self.scan()
+            if until_delivery <= 0:
+                await self.check_delivery()
+                until_delivery = DELIVERY_SECONDS
             await asyncio.sleep(LOCAL_SCAN_SECONDS)
             until_poll -= LOCAL_SCAN_SECONDS
+            until_delivery -= LOCAL_SCAN_SECONDS
 
     async def scan(self) -> None:
         """Read every tab's folder. A branch not seen before is looked up at once, so a
@@ -169,6 +187,26 @@ class PrBoard:
             (found.repository, found.branch) for found in facts.values() if found not in known
         )
         self._links.changed()
+
+    async def check_delivery(self) -> None:
+        """See what each tab still has to ship, and what has judged what it shipped."""
+        wanted = []
+        for tab in self._links.tabs():
+            facts = self._facts.get(tab.id, TabFacts())
+            pr = self.pr_of_tab(tab.id)
+            wanted.append((tab.id, agents.tab_tree(tab), tab.agent, facts, pr))
+        read = self._delivery.read
+
+        def read_all() -> dict[str, Progress]:
+            return {
+                tab_id: read(tree, agent, facts.repository, facts.ship, pr)
+                for tab_id, tree, agent, facts, pr in wanted
+            }
+
+        progress = await self._loop.run_in_executor(None, read_all)
+        if progress != self._progress:
+            self._progress = progress
+            self._links.changed()
 
     async def refresh(self, repository: Path | None = None) -> None:
         """Ask GitHub about one repository, or all of them."""
@@ -212,20 +250,17 @@ class PrBoard:
 
     async def look_up_branches(self, pairs: Iterable[tuple[Path | None, str | None]]) -> None:
         """Find the PR of each `(repository, branch)` that heads no open one: merged,
-        closed, or none. A merged PR stays merged, so it is asked about once."""
+        closed, or none. A merged one is asked about until its checks have settled."""
         wanted = {(repository, branch) for repository, branch in pairs if repository and branch}
         for repository, branch in wanted:
-            if branch in TRUNK_BRANCHES or self._pr_is_settled(repository, branch):
+            known = self._by_branch.get((repository, branch))
+            if branch in TRUNK_BRANCHES or (known and is_settled(known, datetime.now(UTC))):
                 continue
             if any(pr.head == branch for pr in self._open.get(repository, ())):
                 continue
             found = await self._ask(self._gh.for_branch, repository, branch)
             if found is not None:
                 self._by_branch[(repository, branch)] = found
-
-    def _pr_is_settled(self, repository: Path, branch: str) -> bool:
-        known = self._by_branch.get((repository, branch))
-        return known is not None and known.state == MERGED
 
     async def _ask(self, call: Callable[..., Any], *args: Any) -> Any:
         """Run a `gh` call off the loop. A failure is logged once per message and reads as

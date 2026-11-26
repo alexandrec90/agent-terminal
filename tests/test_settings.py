@@ -22,12 +22,22 @@ def test_a_moved_claude_directory_moves_its_trust_record_too(monkeypatch, tmp_pa
     assert module.default_claude_config_file() == tmp_path / ".claude.json"
 
 
+def test_tabs_sleep_after_a_quarter_of_an_hour_by_default(monkeypatch):
+    monkeypatch.delenv("AGENT_TERMINAL_SLEEP_AFTER_SECONDS", raising=False)
+    assert Settings().sleep_after_seconds == 15 * 60
+
+
 def test_environment_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_TERMINAL_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AGENT_TERMINAL_CLAUDE_COMMAND", "fake")
     settings = Settings()
     assert settings.data_dir == tmp_path
     assert settings.claude_command == "fake"
+
+
+def test_devkit_is_beside_the_projects_unless_said_otherwise(tmp_path):
+    assert Settings(projects_root=tmp_path).devkit_root == tmp_path / "devkit"
+    assert Settings(devkit_dir=tmp_path / "other").devkit_root == tmp_path / "other"
 
 
 def test_files_live_in_the_data_dir(tmp_path):

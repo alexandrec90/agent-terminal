@@ -82,7 +82,11 @@ class Rig:
             # PR board off, and `test_pr_board.py` has it for itself.
             gh_command=str(tmp_path / "no-gh"),
         )
-        entries = {tmp_path.as_posix(): {"hasTrustDialogAccepted": True}}
+        # Claude's trust stops at a repository's root, so `repo` needs its own.
+        entries = {
+            tmp_path.as_posix(): {"hasTrustDialogAccepted": True},
+            (self.settings.projects_root / "repo").as_posix(): {"hasTrustDialogAccepted": True},
+        }
         self.settings.claude_config_file.write_text(json.dumps({"projects": entries}))
         self.settings.codex_home.mkdir()
         (self.settings.codex_home / "config.toml").write_text(
@@ -488,7 +492,7 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
     await rig.hello()
     tab = await rig.create()
     await rig.manager.handle({"type": "close", "id": tab["id"]})
-    # The group's place is kept, for the next tab opened in that folder.
+    # The group stays, and its place, for the next tab opened in that folder.
     repo = str(rig.repo.resolve())
     assert rig.state() == {
         "type": "state",
@@ -496,10 +500,40 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
         "tabs": [],
         "group_order": [repo],
         "prs": [],
+        "kept": [{"path": repo, "name": rig.repo.resolve().name}],
         "folded": [],
         "hidden": [],
         "sidebar_width": None,
     }
+
+
+@run
+async def test_a_group_emptied_tab_by_tab_stays_until_its_own_close(rig):
+    await rig.hello()
+    first = await rig.create()
+    second = await rig.create()
+    repo = first["project_path"]
+    await rig.manager.handle({"type": "close", "id": first["id"]})
+    await rig.manager.handle({"type": "close", "id": second["id"]})
+    assert [group["path"] for group in rig.state()["kept"]] == [repo]
+    assert rig.state()["hidden"] == []
+    await rig.manager.handle({"type": "close_group", "path": repo})
+    assert rig.state()["kept"] == []
+    assert rig.state()["hidden"] == [repo]
+
+
+@run
+async def test_an_empty_kept_group_survives_a_restart(rig):
+    await rig.hello()
+    tab = await rig.create()
+    await rig.manager.handle({"type": "close", "id": tab["id"]})
+    await rig.manager.shutdown()
+    assert load_snapshot(rig.settings.state_file).kept == [tab["project_path"]]
+
+    sessions = LocalSessions(rig.spawn, rig.killed.append)
+    again = TabManager(rig.settings, rig.messages.append, rig.loop, sessions)
+    await again.handle({"type": "hello", "rows": 30, "cols": 100})
+    assert [group["path"] for group in rig.state()["kept"]] == [tab["project_path"]]
 
 
 @run
@@ -776,6 +810,45 @@ async def test_restore_brings_back_every_tab_and_the_active_one(rig):
     assert rig.tabs()[1]["attention"] == NEEDS_INPUT
     assert rig.state()["active_id"] == "b"
     assert len(rig.processes) == 2
+
+
+@run
+async def test_a_tab_left_asleep_stays_so_until_the_user_goes_to_it(rig):
+    path = str(rig.settings.projects_root / "repo")
+    write_session(rig, rig.repo, "s2")
+    tabs = [
+        make_saved_tab(path, id="a", session_id="s1"),
+        make_saved_tab(path, id="b", session_id="s2", asleep=True),
+    ]
+    save_snapshot(rig.settings.state_file, Snapshot(tabs=tabs, active_id="a"))
+    await rig.hello()
+    assert [t["status"] for t in rig.tabs()] == ["starting", "asleep"]
+    assert len(rig.processes) == 1
+    await rig.manager.handle({"type": "resize", "rows": 40, "cols": 90})
+
+    await rig.manager.handle({"type": "activate", "id": "b"})
+    assert rig.tabs()[1]["status"] == "starting"
+    for _ in range(200):
+        if len(rig.processes) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert rig.processes[1].command().startswith("& 'claude' '--resume' 's2'")
+    assert rig.sizes[1] == (40, 90)
+    assert any(m == {"type": "reset", "id": "b"} for m in rig.messages)
+    await rig.manager.shutdown()
+    assert [t.asleep for t in load_snapshot(rig.settings.state_file).tabs] == [False, False]
+
+
+@run
+async def test_the_tab_on_screen_at_launch_is_never_left_asleep(rig):
+    path = str(rig.settings.projects_root / "repo")
+    save_snapshot(
+        rig.settings.state_file,
+        Snapshot(tabs=[make_saved_tab(path, id="a", asleep=True)], active_id="a"),
+    )
+    await rig.hello()
+    assert rig.tabs()[0]["status"] == "starting"
+    assert len(rig.processes) == 1
 
 
 @run
@@ -1179,6 +1252,18 @@ async def test_untrusted_worktree_runs_claude_plain_at_the_repository(rig):
     assert "--worktree" not in rig.processes[0].command()
     assert "--session-id" not in rig.processes[0].command()
     assert Path(rig.processes[0].cwd) == rig.repo.resolve()
+
+
+@run
+async def test_a_repository_under_a_trusted_folder_is_asked_about_first(rig):
+    """The folder above is trusted but the repository is not: `claude -w` refuses that."""
+    rig.make_repository()
+    entries = {rig.settings.projects_root.as_posix(): {"hasTrustDialogAccepted": True}}
+    rig.settings.claude_config_file.write_text(json.dumps({"projects": entries}))
+    await rig.hello()
+    await rig.create(worktree=True)
+    assert "--worktree" not in rig.processes[0].command()
+    assert rig.tabs()[0]["awaiting_trust"] is True
 
 
 @run

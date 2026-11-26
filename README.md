@@ -29,12 +29,14 @@ Starting it a second time brings the running window forward.
 | Resize the sidebar | Drag its edge; double-click the edge to reset. The width is kept between launches |
 | Close a group | **×** on its heading (on hover): closes every session in it after asking, and hides its PRs until a session opens there |
 | Clone a repository | **+ New group** → **Clone one of your GitHub repositories…**: lists yours not yet in the projects root |
+| Create a project | **+ New group** → **Create a new project from devkit…**: a name, a preset and whether to make its public GitHub repo. **Preview** shows the plan and writes nothing; **Create** runs devkit's `new-project.py` and chooses the new project. The run is kept in `new-project.log` in the data folder |
 | Delete a project | The bin beside it in **+ New group**. It goes to the Recycle Bin, after a warning naming anything not pushed; one with a tab open is refused |
 | Put a new line in a prompt | Shift+Enter or Ctrl+Enter |
 | Copy / paste in a terminal | Right-click: copies a selection, pastes if there is none |
 | Review a PR | Click its chip on a tab, or its row in a group |
 | Merge or close a PR | **Merge** or **Close PR** in the review; both ask first |
 | Reopen a PR's session | **Open prompt** in the review, when its worktree still holds one |
+| See your day | The tally at the top: today's prompts and PRs, your average and your record. Click it for a graph by day |
 
 Amber means the agent cannot go on without you: it asked for permission, asked a
 question, failed, or is on a trust screen. Blue means it finished a turn. A grey tab
@@ -43,6 +45,18 @@ stays grey until the agent stops on you *again*.
 Closing the window ends the agents and keeps the tabs: the next launch resumes every
 session, with its worktree, grey state and selected tab. **×** forgets a tab for good. It
 does not remove a worktree the session created, since that may hold work.
+
+### Sleeping tabs
+
+A Claude tab left idle and out of view for 15 minutes goes to sleep: its agent is ended,
+which frees about half a gigabyte, and the tab shows a moon. Click it and the session
+resumes, in a few seconds. A sleeping tab stays asleep when the app starts again.
+
+A tab is left awake if it is working or waiting on you, holds text you have not sent, has
+a background command or subagent, or ever set itself a wake-up or a schedule. So is one
+whose session changed with `/clear` or `/resume`, as the tab would wake into the old one,
+and every Codex tab. `AGENT_TERMINAL_SLEEP_AFTER_SECONDS` changes the time; `0` turns
+it off.
 
 ### Updating without stopping the agents
 
@@ -59,6 +73,7 @@ the window that comes back rebuilds each tab's screen from it.
 | `Updated: abc123 → def456` | The last update worked |
 | `Update failed at …` | It names the step; the full output is in `update.log` in the data directory |
 | `Running sessions use the previous session host.` | The update changed the host itself. **Restart sessions** (two clicks) ends every agent and resumes each one |
+| `This copy of the app cannot update itself…` | It was installed as a copy (`uv tool install`, `pip install`), which has no checkout to pull. Run the `.venv\Scripts\agent-terminal.exe` it names instead |
 
 The app checks `origin/main` at start and every half hour, from the checkout it runs
 from. Closing the window still ends everything, host included. If the window crashes,
@@ -89,6 +104,18 @@ open PRs each minute. So a project with an open PR has a group even with no sess
 | `ship refused` | The pass tried that intent and could not ship it |
 | `PR #12 ✓` | Its PR is open; `✗` checks failing, `…` running, `conflicts` needs a rebase |
 | `PR #12 merged` / `closed` | Its PR is done, and the tab is yours to close |
+| **Create PR** | It has changes and no PR: click to have its agent run devkit's `land` skill |
+| **Push** | Its PR is open and it has changes the PR has not: the same skill adds them |
+| **New PR** | Its PR merged and it has changes since: its agent ships those alone as a new one |
+
+The button needs the project to have the `land` skill, and works while the agent is at its
+prompt. It types there, so anything already typed is sent along with it.
+
+Beside a PR, an icon for each thing that judges it, gray until it has and then green or red:
+CI (GitHub's checks), local tests and E2E (devkit's scheduled tiers, which run after the
+merge, so a red may be another change's doing), and live. Live is green once the main
+checkout has the merge, or for this app once it has restarted on it. A type the project
+does not have shows no icon.
 
 A PR no tab holds is a row of its own in its group, marked `prompt on disk` if the
 worktree it came from still has a session to reopen. A tab and a PR are matched by the
@@ -98,6 +125,15 @@ app, and follows a branch the fix pass renames.
 Merging squashes, as the harness's own merges do. It does not delete the branch: the
 repository's delete-on-merge setting covers the remote, and `worktree.py reconcile` owns
 the worktree.
+
+### The tally
+
+Prompts are those Claude Code records in `~/.claude/history.jsonl`, typed in this app or
+anywhere else. Claude's own commands, such as `/clear`, and prompts the fix pass dispatched
+are not counted. A PR counts if a session you prompted opened it, or was on its branch
+first (`agent_terminal/own_prs.py`); scheduled tasks, fixers and bots are left out. Codex
+is in neither count. The average is over days that had any, before today; the record can
+be today's.
 
 ## How a tab knows
 
@@ -131,6 +167,9 @@ agent_terminal/              the app
   agents.py                  how each agent is launched and resumed
   codex_sessions.py          finding a Codex tab's session on disk
   runner.py                  a tab's process; pty_session.py is the pseudo-console
+  sleeper.py                 putting idle tabs to sleep and waking them
+  rest.py                    whether a session can be ended now and resumed later
+  processes.py               what is running under an agent
   sessions.py                where a tab's process lives: here, or in the session host
   host.py                    the session host, which outlives the window
   host_client.py             the app's side of it; host_protocol.py is the wire format
@@ -145,6 +184,8 @@ agent_terminal/              the app
   prs.py                     pull requests through `gh`
   pr_board.py                keeping PRs current and tying them to tabs
   prompts.py                 finding the session that worked in a worktree
+  productivity.py            each day's prompts and PRs, for the tally
+  own_prs.py                 which PRs came from a session you prompted
   shipping.py                where a worktree stands with the fix pass
   server.py                  the loopback server the window's page talks to
   store.py                   the session file

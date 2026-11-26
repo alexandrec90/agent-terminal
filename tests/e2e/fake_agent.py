@@ -61,9 +61,15 @@ def trust_records() -> dict[str, dict[str, bool]]:
 
 
 def is_trusted() -> bool:
-    here = Path.cwd()
+    """As Claude Code 2.1.332: trust reaches down into a folder, but not across the root
+    of a repository below the trusted one."""
     known = {Path(path) for path, entry in trust_records().items() if entry.get("trusted", True)}
-    return here in known or bool(known & set(here.parents))
+    for candidate in (Path.cwd(), *Path.cwd().parents):
+        if candidate in known:
+            return True
+        if (candidate / ".git").exists():
+            return False
+    return False
 
 
 def record_trust() -> None:

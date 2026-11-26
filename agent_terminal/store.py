@@ -41,6 +41,8 @@ class Tab:
     # When the session last did something the user set going; None until it has, when
     # the page shows `created_at` instead.
     updated_at: float | None = None
+    # Its agent was ended while idle, and is resumed when the tab is next shown.
+    asleep: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -59,6 +61,9 @@ class Snapshot:
     # held only PRs, which stay out of the sidebar until a session opens there.
     folded: list[str] = field(default_factory=list)
     hidden: list[str] = field(default_factory=list)
+    # Groups that stay in the sidebar with no tab, until closed. None in a file from
+    # before they were kept.
+    kept: list[str] | None = None
     # In CSS pixels; None until the user drags it, for the page's default.
     sidebar_width: int | None = None
 
@@ -77,6 +82,24 @@ def clean_sidebar_width(value: object) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool):
         return None
     return max(value, MIN_SIDEBAR_WIDTH)
+
+
+class SidebarWidth:
+    """The width the user dragged the sidebar to; None is the page's default."""
+
+    def __init__(self, changed: Callable[[], None]) -> None:
+        self._changed = changed
+        self.value: int | None = None
+
+    async def on_width(self, message: dict[str, Any]) -> None:
+        """Keep the width a `sidebar_width` message names. Raises `ValueError` for
+        anything but a whole number or None."""
+        wanted = message["width"]
+        width = clean_sidebar_width(wanted)
+        if width is None and wanted is not None:
+            raise ValueError(f"not a sidebar width: {wanted!r}")
+        self.value = width
+        self._changed()
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -111,6 +134,7 @@ def parse_snapshot(text: str) -> Snapshot:
         group_order=clean_group_order(data.get("group_order")),
         folded=paths_of(data.get("folded")),
         hidden=paths_of(data.get("hidden")),
+        kept=None if data.get("kept") is None else paths_of(data["kept"]),
         sidebar_width=clean_sidebar_width(data.get("sidebar_width")),
     )
 
@@ -148,6 +172,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
         "tabs": [tab.to_dict() for tab in snapshot.tabs],
         "folded": snapshot.folded,
         "hidden": snapshot.hidden,
+        "kept": snapshot.kept,
         "sidebar_width": snapshot.sidebar_width,
     }
     path.parent.mkdir(parents=True, exist_ok=True)

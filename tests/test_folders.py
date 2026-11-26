@@ -101,6 +101,14 @@ class TestDescribeFolder:
             "codex": False,
         }
 
+    def test_a_repository_under_a_trusted_folder_is_not_trusted_by_claude(self, settings, tmp_path):
+        repository = tmp_path / "repo"
+        repository.mkdir()
+        commit(repository)
+        entries = {tmp_path.as_posix(): {"hasTrustDialogAccepted": True}}
+        settings.claude_config_file.write_text(json.dumps({"projects": entries}), encoding="utf-8")
+        assert describe_folder(settings, str(repository))["trusted"]["claude"] is False
+
     def test_a_folder_that_does_not_exist(self, settings, tmp_path):
         missing = str(tmp_path / "absent")
         assert describe_folder(settings, missing) == {"requested": missing, "exists": False}

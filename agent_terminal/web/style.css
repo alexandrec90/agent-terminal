@@ -138,6 +138,180 @@ button {
   color: var(--bg);
 }
 
+/* ---- Prompts and PRs: the tally, and its graph ---- */
+
+/* Blue and orange: told apart under any color blindness, and neither is a status here. */
+#tally,
+#productivity {
+  --series-prompts: #338ced;
+  --series-prs: #e76624;
+}
+
+#tally {
+  display: grid;
+  flex: none;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: left;
+}
+
+#tally[hidden] {
+  display: none;
+}
+
+#tally:hover {
+  background: var(--panel-raised);
+}
+
+.tally-today {
+  font-size: 16px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tally-name,
+.tally-stat {
+  white-space: nowrap;
+}
+
+.tally-name::before,
+.legend-name::before {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--series-prompts);
+  content: "";
+}
+
+.tally-name.prs::before,
+.legend-name.prs::before {
+  background: var(--series-prs);
+}
+
+.tally-stat {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#productivity {
+  width: min(960px, calc(100vw - 32px));
+  max-height: 80vh;
+  margin-top: 8vh;
+  overflow-y: auto;
+}
+
+.productivity-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.productivity-head h2 {
+  flex: 1;
+  margin: 0;
+}
+
+#productivity-ranges button,
+#productivity-close {
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+#productivity-ranges button:hover,
+#productivity-ranges button[aria-pressed="true"],
+#productivity-close:hover {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+#productivity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 32px;
+  margin: 14px 0 10px;
+}
+
+.legend-stats {
+  margin-left: 10px;
+  color: var(--muted);
+}
+
+#productivity-chart {
+  position: relative;
+}
+
+#productivity-chart svg {
+  display: block;
+  width: 100%;
+}
+
+.chart-grid {
+  stroke: var(--line);
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.chart-bar.prompts {
+  fill: var(--series-prompts);
+}
+
+.chart-bar.prs {
+  fill: var(--series-prs);
+}
+
+.chart-hit {
+  fill: transparent;
+}
+
+.chart-hit:hover {
+  fill: rgb(255 255 255 / 6%);
+}
+
+.chart-tip {
+  position: absolute;
+  top: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-raised);
+  font-size: 12px;
+  white-space: pre;
+  pointer-events: none;
+}
+
+#productivity details {
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+#productivity-table {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+#productivity-table th,
+#productivity-table td {
+  padding: 2px 24px 2px 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.productivity-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 #groups {
   display: flex;
   flex: 1;
@@ -360,6 +534,11 @@ button {
   animation: spin 1s linear infinite;
 }
 
+/* No process behind it. The moon says so; the dimmed title keeps awake tabs standing out. */
+.tab.asleep:not(.attention) .tab-title {
+  color: var(--muted);
+}
+
 @keyframes spin {
   to {
     transform: rotate(1turn);
@@ -468,7 +647,42 @@ button {
   color: var(--muted);
 }
 
-button.tab-chip:hover {
+.tab-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  align-items: center;
+}
+
+.tab-chip.land {
+  color: var(--accent);
+}
+
+.tab-chip.land:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* What judges the change, each in its own time. */
+.tab-gates {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.gate {
+  color: var(--parked);
+}
+
+.gate.passing {
+  color: var(--working);
+}
+
+.gate.failing {
+  color: var(--failing);
+}
+
+button.tab-chip:not(:disabled):hover {
   outline: 1px solid currentcolor;
 }
 
@@ -762,13 +976,36 @@ legend {
   outline: 2px solid var(--accent);
 }
 
-/* A group's sessions no tab has open. */
+/* A group's sessions no tab has open. A fixed height, not a maximum: the list arrives after
+   the dialog opens, and a box that grew then would move Start out from under the pointer. */
 #resume-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 34vh;
+  height: min(34vh, 240px);
   overflow-y: auto;
+}
+
+#resume-list .past-session {
+  flex-shrink: 0;
+}
+
+.past-loading {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+.past-loading .icon {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .past-loading .icon {
+    animation: none;
+  }
 }
 
 .past-session {
@@ -815,15 +1052,91 @@ legend {
   white-space: pre-wrap;
 }
 
-#remote-toggle {
+#remote-toggle,
+#scaffold-toggle {
+  display: block;
   margin-top: 8px;
   padding: 0;
   color: var(--accent);
   font-size: 12px;
 }
 
-#remote-toggle:hover {
+#remote-toggle:hover,
+#scaffold-toggle:hover {
   text-decoration: underline;
+}
+
+#scaffold {
+  margin-top: 6px;
+}
+
+#scaffold-status {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+#scaffold-status:empty {
+  display: none;
+}
+
+#scaffold-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#scaffold-fields[hidden] {
+  display: none;
+}
+
+#scaffold-fields input[type="text"],
+#scaffold-preset {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+#scaffold-fields input[type="text"]:focus,
+#scaffold-preset:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.scaffold-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.scaffold-actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.scaffold-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.scaffold-actions button:disabled {
+  color: var(--muted);
+}
+
+#scaffold-output {
+  max-height: 25vh;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font: 11px/1.4 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
 }
 
 #remote {

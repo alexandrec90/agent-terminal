@@ -11,6 +11,7 @@
   <body>
     <aside id="sidebar">
       <div id="app-bar" hidden></div>
+      <button id="tally" type="button" title="Show prompts and PRs by day" hidden></button>
       <div id="groups"></div>
       <button id="new-group" type="button" title="Start a session in any folder">
         <svg class="icon" aria-hidden="true" data-icon="add"><use href="icons/ui.svg#add" /></svg>
@@ -56,6 +57,39 @@
             <p id="remote-status"></p>
             <div id="remote-list"></div>
           </div>
+          <button type="button" id="scaffold-toggle" aria-expanded="false">
+            Create a new project from devkit…
+          </button>
+          <div id="scaffold" hidden>
+            <p id="scaffold-status"></p>
+            <div id="scaffold-fields">
+              <input
+                id="scaffold-name"
+                type="text"
+                placeholder="Name: the folder, the package and the Docker project"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <input
+                id="scaffold-description"
+                type="text"
+                placeholder="One-line description"
+                autocomplete="off"
+              />
+              <select id="scaffold-preset" aria-label="Project shape"></select>
+              <label class="toggle">
+                <input type="checkbox" id="scaffold-remote" checked />
+                <span>Create a public GitHub repository and push to it</span>
+              </label>
+              <div class="scaffold-actions">
+                <button type="button" id="scaffold-preview" title="Show the plan; write nothing">
+                  Preview
+                </button>
+                <button type="button" id="scaffold-create">Create</button>
+              </div>
+            </div>
+            <pre id="scaffold-output" hidden></pre>
+          </div>
         </fieldset>
 
         <fieldset id="resume-field" hidden>
@@ -97,6 +131,24 @@
         <button type="button" id="confirm-cancel">Cancel</button>
         <button type="button" id="confirm-ok" class="primary"></button>
       </div>
+    </dialog>
+
+    <dialog id="productivity">
+      <div class="productivity-head">
+        <h2>Prompts and PRs per day</h2>
+        <div id="productivity-ranges" role="group" aria-label="Days shown"></div>
+        <button type="button" id="productivity-close" aria-label="Close" title="Close">×</button>
+      </div>
+      <div id="productivity-summary"></div>
+      <div id="productivity-chart"></div>
+      <details>
+        <summary>Show as a table</summary>
+        <div id="productivity-table"></div>
+      </details>
+      <p class="productivity-note">
+        Your own prompts, and the PRs that came from them: nothing automated, and nothing from
+        Codex. Averages are over days with any, before today.
+      </p>
     </dialog>
 
     <script src="vendor/xterm.js"></script>

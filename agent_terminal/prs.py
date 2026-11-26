@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,8 @@ LIST_LIMIT = "50"
 MAX_DIFF_CHARACTERS = 2_000_000
 LIST_FIELDS = (
     "number,title,url,state,headRefName,baseRefName,isDraft,author,statusCheckRollup,"
-    "reviewDecision,mergeable,mergeStateStatus,labels,mergeCommit"
+    "reviewDecision,mergeable,mergeStateStatus,labels,mergeCommit,"
+    "mergedAt,headRefOid"
 )
 DETAIL_FIELDS = f"{LIST_FIELDS},body,additions,deletions,changedFiles,comments"
 
@@ -45,6 +48,12 @@ FAILED_CONCLUSIONS = frozenset(
 )
 FAILED_STATES = frozenset({"FAILURE", "ERROR"})
 WAITING_STATES = frozenset({"PENDING", "EXPECTED"})
+
+# devkit's merge machinery: its jobs run on every PR and say nothing about the change.
+PLUMBING_WORKFLOWS = frozenset({"Auto-merge"})
+E2E_NAME = re.compile(r"\be2e\b|\bend[- ]to[- ]end\b", re.IGNORECASE)
+# A PR merges before its checks finish, so a merged one is asked about this much longer.
+CHECKS_SETTLE = timedelta(hours=2)
 
 
 class GhError(Exception):
@@ -73,6 +82,12 @@ class PullRequest:
     automerge: bool
     # Set once merged: what the main checkout must contain to be running the change.
     merge_commit: str = ""
+    merged_at: str = ""
+    # The last commit of the PR's branch, as GitHub has it.
+    head_oid: str = ""
+    # `checks` split by kind, without the merge machinery's own jobs.
+    ci: str = CHECKS_NONE
+    e2e: str = CHECKS_NONE
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -99,9 +114,36 @@ def summarize_checks(rollup: Iterable[Mapping[str, Any]] | None) -> str:
     return CHECKS_NONE
 
 
+def split_checks(rollup: Iterable[Mapping[str, Any]] | None) -> tuple[str, str]:
+    """`(ci, e2e)`: the checks that judge the change, each kind in a word."""
+    ci: list[Mapping[str, Any]] = []
+    e2e: list[Mapping[str, Any]] = []
+    for check in rollup or ():
+        workflow = str(check.get("workflowName") or "")
+        if check.get("conclusion") == "SKIPPED" or workflow in PLUMBING_WORKFLOWS:
+            continue
+        name = check.get("name") or check.get("context") or ""
+        (e2e if E2E_NAME.search(f"{workflow} {name}") else ci).append(check)
+    return summarize_checks(ci), summarize_checks(e2e)
+
+
+def is_settled(pr: PullRequest, now: datetime) -> bool:
+    """Whether nothing more is to be heard of a PR: merged, with its checks passed or long
+    enough gone. A red one may be re-run, and one just merged may have no checks yet."""
+    if pr.state != MERGED:
+        return False
+    if pr.ci == CHECKS_PASSING and pr.e2e in (CHECKS_PASSING, CHECKS_NONE):
+        return True
+    try:
+        return now - datetime.fromisoformat(pr.merged_at) > CHECKS_SETTLE
+    except (ValueError, TypeError):
+        return True
+
+
 def to_pull_request(record: Mapping[str, Any]) -> PullRequest:
     """Build one from `gh`'s JSON. Raises `KeyError` or `TypeError` if it is not a PR."""
     labels = {label.get("name") for label in record.get("labels") or ()}
+    ci, e2e = split_checks(record.get("statusCheckRollup"))
     return PullRequest(
         number=int(record["number"]),
         title=str(record["title"]),
@@ -116,6 +158,10 @@ def to_pull_request(record: Mapping[str, Any]) -> PullRequest:
         review=str(record.get("reviewDecision") or ""),
         automerge="automerge" in labels,
         merge_commit=str((record.get("mergeCommit") or {}).get("oid") or ""),
+        merged_at=str(record.get("mergedAt") or ""),
+        head_oid=str(record.get("headRefOid") or ""),
+        ci=ci,
+        e2e=e2e,
     )
 
 

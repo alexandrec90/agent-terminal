@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -67,8 +68,12 @@ def make_repository(folder: Path) -> None:
 def make_projects(base: Path) -> None:
     make_repository(base / "projects" / "alpha")
     (base / "projects" / "beta").mkdir()
-    # Trusted as a whole, as the user's own projects root is.
-    trusted = {(base / "projects").as_posix(): {"hasTrustDialogAccepted": True}}
+    # The projects root's trust stops at a repository, so alpha has its own, as a
+    # repository the user has run Claude in does.
+    trusted = {
+        (base / "projects").as_posix(): {"hasTrustDialogAccepted": True},
+        (base / "projects" / "alpha").as_posix(): {"hasTrustDialogAccepted": True},
+    }
     (base / "claude.json").write_text(json.dumps({"projects": trusted}), encoding="utf-8")
 
 
@@ -269,9 +274,23 @@ def test_groups_follow_their_sessions(tmp_path):
         count = "document.querySelectorAll('[data-project=\"alpha\"] .tab').length"
         await window.wait(f"{count} === 2", "a second tab in the group")
 
+        # Its last tab closed, a group stays, with its "+" and "x", until that "x".
         await window.click('[data-project="beta"] .tab-close')
-        await window.wait(f"{groups}.length === 1", "the empty group to go")
+        beta_tabs = "document.querySelectorAll('[data-project=\"beta\"] .tab').length"
+        await window.wait(f"{beta_tabs} === 0", "the group's last tab to close")
+        assert await window.js(groups) == ["alpha", "beta"]
         assert first in {tab["id"] for tab in await window.tabs()}
+        for control in (".group-add", ".group-close"):
+            selector = json.dumps(f'[data-project="beta"] {control}')
+            assert await window.js(f"document.querySelector({selector}) !== null") is True
+
+        await window.drag('[data-project="beta"] .group-head', '[data-project="alpha"]')
+        await window.wait(f"{groups}[0] === 'beta'", "the empty group dragged up")
+
+        # Nothing in it to lose, so its "x" asks nothing.
+        await window.click('[data-project="beta"] .group-close')
+        await window.wait(f"{groups}.length === 1", "the empty group to go")
+        assert await window.js(groups) == ["alpha"]
 
     scenario(tmp_path, body)
 
@@ -437,6 +456,55 @@ def test_a_repository_on_github_can_be_cloned_from_the_dialog(tmp_path):
         assert await window.wait(selected, "the clone to be chosen") == "gamma"
         await window.start_session()
         await window.wait("window.__agentTerminal.tabs().length === 1", "a session in the clone")
+
+    scenario(tmp_path, body)
+
+
+# devkit's new-project.py as far as the dialog can tell: the same flags, and a folder
+# where it was asked for once applied. Nothing is rendered and nothing reaches GitHub.
+FAKE_NEW_PROJECT = """
+import argparse, pathlib
+parser = argparse.ArgumentParser()
+parser.add_argument("name")
+parser.add_argument("--description", default="")
+parser.add_argument("--preset", choices=["bare", "service"])
+parser.add_argument("--parent", default="")
+parser.add_argument("--remote", action="store_true")
+parser.add_argument("--no-remote", action="store_true")
+parser.add_argument("--dry-run", action="store_true")
+parser.add_argument("--yes", action="store_true")
+args = parser.parse_args()
+print(f"plan for {args.name}: {args.preset}, remote={args.remote}")
+if args.yes:
+    (pathlib.Path(args.parent) / args.name).mkdir()
+    print("Done")
+"""
+
+
+def test_a_new_project_can_be_made_from_the_dialog(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        (app.devkit / "scripts").mkdir(parents=True)
+        (app.devkit / "scripts" / "new-project.py").write_text(FAKE_NEW_PROJECT, "utf-8")
+        await window.click("#new-group")
+        await window.click("#scaffold-toggle")
+        presets = "[...document.querySelectorAll('#scaffold-preset option')].map(o => o.value)"
+        await window.wait(f"{presets}.length", "the presets")
+        assert await window.js(presets) == ["service", "bare"]
+
+        await window.js(
+            "(() => { const n = document.getElementById('scaffold-name');"
+            " n.value = 'fresh'; n.dispatchEvent(new Event('input')); })()"
+        )
+        await window.click("#scaffold-preview")
+        output = "document.getElementById('scaffold-output').textContent"
+        await window.wait(f"{output}.includes('plan for fresh')", "the plan")
+        assert not (app.projects / "fresh").exists()
+
+        await window.wait("!document.getElementById('scaffold-create').disabled", "the preview")
+        await window.click("#scaffold-create")
+        selected = "document.querySelector('.project.selected')?.textContent"
+        assert await window.wait(selected, "the project to be chosen") == "fresh"
+        assert (app.projects / "fresh").is_dir()
 
     scenario(tmp_path, body)
 
@@ -712,10 +780,38 @@ def test_a_prompt_shows_where_it_stands_in_shipping(tmp_path):
         )
         await window.wait("document.getElementById('review').hidden", "the terminal")
 
+        # Each thing that judges it has an icon; nothing is live before the merge.
+        gates = f"[...document.querySelectorAll('[data-id=\"{tab}\"] .gate')].map(g => g.className)"
+        await window.wait(f"{gates}.length === 2", "the indicators")
+        assert await window.js(gates) == ["gate passing", "gate pending"]
+
         # Merged on GitHub: the tab says so.
         write_prs(app, make_pr(9, "worktree-task", state="MERGED"))
         await window.wait(f"{chip}?.textContent === 'PR #9 merged'", "the merged chip")
         assert await window.js(on_chip) == "pr-merged"
+
+    scenario(tmp_path, body)
+
+
+def test_a_tab_with_unshipped_work_offers_to_land_it(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        alpha = tmp_path / "projects" / "alpha"
+        skill = alpha / ".claude" / "skills" / "land" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("land", encoding="utf-8")
+        git(alpha, "add", "--all")
+        git(alpha, "commit", "--message", "skill")
+        git(alpha, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(alpha, "switch", "--create", "worktree-task")
+        tab = await open_tab(window, "alpha")
+        button = f"document.querySelector('[data-id=\"{tab}\"] .land')"
+        assert await window.js(button) is None
+
+        (alpha / "new.txt").write_text("x", encoding="utf-8")
+        await window.wait(f"{button}?.textContent === 'Create PR'", "the button")
+        await window.js(f"{button}.click()")
+        screen = f"window.__agentTerminal.screen('{tab}')"
+        await window.wait(f"{screen}.includes('/land')", "the skill typed to the agent")
 
     scenario(tmp_path, body)
 
@@ -770,8 +866,12 @@ def test_a_groups_plus_offers_its_unopened_sessions_with_their_state(tmp_path):
         await window.wait("window.__agentTerminal.tabs()[0].session_id !== null", "an id")
 
         await window.click('[data-project="alpha"] .group-add')
+        start = "document.getElementById('new-tab-start').getBoundingClientRect().top"
+        start_while_loading = await window.js(start)
         row = "document.querySelector('.past-session[data-session=\"earlier-session\"]')"
         await window.wait(f"{row}?.textContent?.includes('PR #12')", "the session and its PR")
+        # The sessions arriving must not move Start out from under the pointer.
+        assert await window.js(start) == start_while_loading
         # The title is text, never markup; the state reads intent, then PR.
         assert await window.js(f"{row}.querySelector('.tab-title').textContent") == (
             "Earlier <b>work</b>"
@@ -833,6 +933,44 @@ def test_closing_the_window_brings_every_tab_back(tmp_path):
             finally:
                 await reopened.dispose()
                 reopened.kill()
+        finally:
+            await app.dispose()
+            app.kill()
+
+    asyncio.run(run())
+
+
+def test_a_sleeping_tab_shows_a_moon_and_resumes_when_clicked(tmp_path):
+    make_projects(tmp_path)
+    project = tmp_path / "projects" / "alpha"
+    transcript = tmp_path / "claude-home" / "projects" / "encoded" / "s.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n", encoding="utf-8")
+    saved = {"project": "alpha", "project_path": str(project), "agent": "claude", "created_at": 1.0}
+    tabs = [
+        {**saved, "id": "awake", "session_id": "other"},
+        {**saved, "id": "resting", "session_id": "s", "asleep": True},
+    ]
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "state.json").write_text(
+        json.dumps({"version": 1, "active_id": "awake", "tabs": tabs}), encoding="utf-8"
+    )
+
+    async def run() -> None:
+        app = App(tmp_path)
+        try:
+            window = await app.start()
+            await window.wait_class("awake", has("idle"), "ready")
+            await window.wait_class("resting", has("asleep"), "asleep")
+            mark = '[data-id="resting"] .tab-dot'
+            assert await window.js(icon_in(mark)) == "asleep"
+            meta = "document.querySelector('[data-id=\"resting\"] .tab-meta').textContent"
+            assert "asleep" in await window.js(meta)
+            assert len(launches(app)) == 1
+
+            await window.click('[data-id="resting"]')
+            await window.wait_class("resting", has("idle"), "resumed")
+            assert launches(app)[-1]["argv"] == ["--resume", "s"]
         finally:
             await app.dispose()
             app.kill()
@@ -933,6 +1071,35 @@ def test_right_click_leaves_the_paste_to_an_agent_tracking_the_mouse(tmp_path):
         )
         await window.right_click(".term-host.shown .xterm")
         assert "paste" not in await window.js("window.__sent")
+
+    scenario(tmp_path, body)
+
+
+def test_the_tally_counts_today_and_opens_the_graph(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        now = datetime.now().astimezone()
+        home = app.base / "claude-home"
+        home.mkdir(exist_ok=True)
+        records = [
+            {
+                "display": text,
+                "timestamp": now.timestamp() * 1000 - 1,
+                "project": "C:\\r\\.claude\\worktrees\\mine",
+                "sessionId": "s",
+            }
+            for text in ("a", "b")
+        ]
+        lines = "".join(json.dumps(record) + "\n" for record in records)
+        (home / "history.jsonl").write_text(lines, encoding="utf-8")
+        mine = make_pr(7, "worktree-mine", createdAt=now.isoformat())
+        write_prs(app, mine, make_pr(8, "agent/auto/upgrade", createdAt=now.isoformat()))
+        today = "[...document.querySelectorAll('.tally-today')].map((n) => n.textContent).join()"
+        await window.wait(f"{today} === '2,1'", "today's prompts and PRs")
+        await window.click("#tally")
+        await window.wait("document.getElementById('productivity').open", "the graph")
+        assert await window.js("document.querySelectorAll('.chart-bar').length") == 2
+        await window.click("#productivity-close")
+        await window.wait("!document.getElementById('productivity').open", "the graph to close")
 
     scenario(tmp_path, body)
 

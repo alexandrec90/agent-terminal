@@ -54,15 +54,38 @@ button {
 
 /* ---- Sidebar ---- */
 
+/* The user's width, whatever is inside: `min-width: auto` would let the longest title widen
+   it. The limits are `sidebar-width.js`'s, for a window made smaller since. */
 #sidebar {
+  position: relative;
   display: flex;
-  flex: 0 0 var(--sidebar-width);
+  flex: none;
+  width: var(--sidebar-width);
+  min-width: 180px;
+  max-width: max(180px, calc(100vw - 320px));
   flex-direction: column;
   gap: 8px;
   padding: 8px;
   background: var(--panel);
   border-right: 1px solid var(--line);
   user-select: none;
+}
+
+#sidebar-edge {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+#sidebar-edge:hover,
+#sidebar-edge.active {
+  background: var(--accent);
+  opacity: 0.5;
 }
 
 /* ---- The app's own news: an update, a stale session host ---- */
@@ -295,7 +318,7 @@ button {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden auto;
 }
 
 .group-head {
@@ -509,11 +532,6 @@ button {
 
 .tab.working .tab-dot .icon {
   animation: spin 1s linear infinite;
-}
-
-/* No process behind it. The moon says so; the dimmed title keeps awake tabs standing out. */
-.tab.asleep:not(.attention) .tab-title {
-  color: var(--muted);
 }
 
 @keyframes spin {

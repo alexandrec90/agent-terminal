@@ -5,6 +5,7 @@ import { NewTabDialog } from "./dialog.js";
 import { Productivity } from "./productivity.js";
 import { ReviewPanel } from "./review.js";
 import { refreshTimes, renderSidebar } from "./sidebar.js";
+import { SidebarWidth } from "./sidebar-width.js";
 import { Terminals } from "./terminals.js";
 
 const groups = document.getElementById("groups");
@@ -114,6 +115,15 @@ const terminals = new Terminals(document.getElementById("terminals"), {
   openUrl: (url) => send({ type: "open_url", url }),
 });
 
+const sidebarWidth = new SidebarWidth(
+  document.getElementById("sidebar"),
+  document.getElementById("sidebar-edge"),
+  {
+    dragging: (active) => terminals.holdRefit(active),
+    save: (width) => send({ type: "sidebar_width", width }),
+  },
+);
+
 function linkedTab() {
   const { pr } = review;
   if (!pr) return null;
@@ -150,6 +160,7 @@ function applyState(state) {
   folded = new Set(state.folded);
   hidden = new Set(state.hidden);
   kept = state.kept ?? [];
+  sidebarWidth.set(state.sidebar_width ?? null);
   if (state.active_id !== activeId) review.close();
   activeId = state.active_id;
   synced = true;

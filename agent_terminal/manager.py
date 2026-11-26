@@ -23,8 +23,7 @@ from agent_terminal.prs import Gh
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.sessions import LocalSessions, SessionSource
 from agent_terminal.settings import Settings
-from agent_terminal.sleeper import Sleeper, SleeperLinks
-from agent_terminal.store import DebouncedSaver, Snapshot, Tab, load_snapshot
+from agent_terminal.store import DebouncedSaver, SidebarWidth, Snapshot, Tab, load_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +64,7 @@ class TabManager:
         self._active_id: str | None = None
         self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._groups = Groups(self._on_changed)
+        self._sidebar = SidebarWidth(self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
         self._saver = DebouncedSaver(loop, settings.state_file, self._snapshot)
@@ -77,17 +77,6 @@ class TabManager:
                 self._on_output,
                 self._on_changed,
                 self._on_clean_exit,
-                lambda tab_id: emit({"type": "reset", "id": tab_id}),
-            ),
-        )
-        self.sleeper = Sleeper(
-            settings,
-            loop,
-            self.runner,
-            SleeperLinks(
-                lambda: self._active_id,
-                lambda: self._size,
-                self._on_changed,
                 lambda tab_id: emit({"type": "reset", "id": tab_id}),
             ),
         )
@@ -110,6 +99,7 @@ class TabManager:
                 self._groups.close(message, self._tabs)
             ),
             "fold_group": self._groups.on_fold,
+            "sidebar_width": self._sidebar.on_width,
             "activate": self._on_activate,
             "toggle_park": self._on_toggle_park,
             "input": self._on_input,
@@ -146,7 +136,6 @@ class TabManager:
         self._restored = True
         self.board.start()
         await self._restore()
-        self.sleeper.start()
 
     async def _on_create(self, message: dict[str, Any]) -> None:
         agent = message["agent"]
@@ -220,8 +209,7 @@ class TabManager:
         self._size = (int(message["rows"]), int(message["cols"]))
         for live in self.runner.live.values():
             live.size = self._size
-            if not live.tab.asleep:
-                live.session.resize(*self._size)
+            live.session.resize(*self._size)
 
     async def _on_paste(self, message: dict[str, Any]) -> None:
         tab_id = self._tab(message["id"]).id
@@ -239,8 +227,6 @@ class TabManager:
         self._emit({"type": "output", "id": tab_id, "data": text})
 
     def _on_changed(self) -> None:
-        # Here, as every way of going to a tab ends in this.
-        self.sleeper.wake_active()
         self._saver.schedule()
         self._emit_state()
 
@@ -266,6 +252,7 @@ class TabManager:
                 "tabs": tabs,
                 "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
+                "sidebar_width": self._sidebar.value,
                 **self._groups.state_fields(),
             }
         )
@@ -279,15 +266,17 @@ class TabManager:
             folded=groups["folded"],
             hidden=groups["hidden"],
             kept=groups["kept"],
+            sidebar_width=self._sidebar.value,
         )
 
     async def _restore(self) -> None:
         """Bring back the saved tabs: each one's process if it outlived the last window,
-        and a resumed agent if not. One left asleep stays so, unless it is on screen."""
+        and a resumed agent if not."""
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
         self._ordering.restore(snapshot.group_order)
         self._groups.restore(snapshot.folded, snapshot.hidden, snapshot.kept, self._tabs)
+        self._sidebar.value = snapshot.sidebar_width
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None
         self._active_id = snapshot.active_id if snapshot.active_id in ids else fallback
@@ -297,7 +286,6 @@ class TabManager:
         adopted = []
         for tab in self._tabs:
             survivor = survivors.pop(tab.id, None)
-            tab.asleep = tab.asleep and survivor is None and tab.id != self._active_id
             if survivor is None:
                 self.runner.add(tab)
             else:
@@ -313,7 +301,7 @@ class TabManager:
             log.info("ending process %s: its tab was closed", leftover.key)
             await self.sessions.discard(leftover)
         kept = {tab_id for tab_id, _ in adopted}
-        for tab in [tab for tab in self._tabs if tab.id not in kept and not tab.asleep]:
+        for tab in [tab for tab in self._tabs if tab.id not in kept]:
             await self.runner.start(tab, self._size)
             await asyncio.sleep(RESTORE_GAP_SECONDS)
 
@@ -324,7 +312,6 @@ class TabManager:
         `keep_processes` is a restart's: every process is left running in the session
         host, with what the next window needs to carry on with it."""
         self.board.stop()
-        self.sleeper.stop()
         await self.runner.find_unfound_sessions()
         self._saver.save_now()
         if keep_processes:

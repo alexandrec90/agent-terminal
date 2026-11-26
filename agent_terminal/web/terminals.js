@@ -56,6 +56,7 @@ export class Terminals {
     this.activeId = null;
     this.webgl = null;
     this.size = null;
+    this.refitHeld = false;
     this.fit = this.createMeasure();
     new ResizeObserver(() => this.refit()).observe(container);
   }
@@ -80,7 +81,14 @@ export class Terminals {
     return { rows: Math.max(proposed.rows, 2), cols: Math.max(proposed.cols, 20) };
   }
 
+  // A drag of the sidebar's edge would resize every agent at each step: only once it ends.
+  holdRefit(held) {
+    this.refitHeld = held;
+    this.refit();
+  }
+
   refit() {
+    if (this.refitHeld) return;
     const { rows, cols } = this.dimensions();
     if (this.size && this.size.rows === rows && this.size.cols === cols) {
       return;

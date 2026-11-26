@@ -26,6 +26,7 @@ Starting it a second time brings the running window forward.
 | Leave a tab for later | Right-click it. It greys out; right-click again to undo |
 | Close a session | **×** on the tab |
 | Fold a group | Click its heading; folded, it shows a count, amber or blue if a session wants you |
+| Resize the sidebar | Drag its edge; double-click the edge to reset. The width is kept between launches |
 | Close a group | **×** on its heading (on hover): closes every session in it after asking, and hides its PRs until a session opens there |
 | Clone a repository | **+ New group** → **Clone one of your GitHub repositories…**: lists yours not yet in the projects root |
 | Create a project | **+ New group** → **Create a new project from devkit…**: a name, a preset and whether to make its public GitHub repo. **Preview** shows the plan and writes nothing; **Create** runs devkit's `new-project.py` and chooses the new project. The run is kept in `new-project.log` in the data folder |
@@ -44,18 +45,6 @@ stays grey until the agent stops on you *again*.
 Closing the window ends the agents and keeps the tabs: the next launch resumes every
 session, with its worktree, grey state and selected tab. **×** forgets a tab for good. It
 does not remove a worktree the session created, since that may hold work.
-
-### Sleeping tabs
-
-A Claude tab left idle and out of view for 15 minutes goes to sleep: its agent is ended,
-which frees about half a gigabyte, and the tab shows a moon. Click it and the session
-resumes, in a few seconds. A sleeping tab stays asleep when the app starts again.
-
-A tab is left awake if it is working or waiting on you, holds text you have not sent, has
-a background command or subagent, or ever set itself a wake-up or a schedule. So is one
-whose session changed with `/clear` or `/resume`, as the tab would wake into the old one,
-and every Codex tab. `AGENT_TERMINAL_SLEEP_AFTER_SECONDS` changes the time; `0` turns
-it off.
 
 ### Updating without stopping the agents
 
@@ -166,9 +155,6 @@ agent_terminal/              the app
   agents.py                  how each agent is launched and resumed
   codex_sessions.py          finding a Codex tab's session on disk
   runner.py                  a tab's process; pty_session.py is the pseudo-console
-  sleeper.py                 putting idle tabs to sleep and waking them
-  rest.py                    whether a session can be ended now and resumed later
-  processes.py               what is running under an agent
   sessions.py                where a tab's process lives: here, or in the session host
   host.py                    the session host, which outlives the window
   host_client.py             the app's side of it; host_protocol.py is the wire format

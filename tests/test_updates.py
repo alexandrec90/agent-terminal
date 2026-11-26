@@ -10,6 +10,7 @@ import pytest
 from agent_terminal.settings import Settings
 from agent_terminal.updates import (
     AppControl,
+    AppOrigin,
     UpdateStatus,
     app_checkout,
     cannot_update,
@@ -162,7 +163,7 @@ class Rig:
             loop,
             lambda: {"kept": True, "stale": False},
             self.restart,
-            **options,
+            AppOrigin(**options),
         )
         self.checked_from: list[str] = []
         self.control._check = self.check
@@ -235,8 +236,7 @@ def test_without_a_checkout_no_start_commit_is_read(tmp_path):
             asyncio.get_running_loop(),
             dict,
             lambda *_: None,
-            source=lambda: None,
-            head=head,
+            AppOrigin(source=lambda: None, head=head),
         )
 
     asyncio.run(go())
@@ -298,7 +298,7 @@ def test_without_a_checkout_there_is_nothing_to_update(tmp_path):
             asyncio.get_running_loop(),
             dict,
             lambda *_: None,
-            source=lambda: tmp_path,
+            AppOrigin(source=lambda: tmp_path),
         )
         control.start()
         await control.check_now()
@@ -329,9 +329,7 @@ def test_a_checkout_never_looks_for_its_install(tmp_path):
             asyncio.get_running_loop(),
             dict,
             lambda *_: None,
-            checkout=tmp_path,
-            source=source,
-            head=lambda _checkout: "",
+            AppOrigin(checkout=tmp_path, source=source, head=lambda _checkout: ""),
         )
 
     asyncio.run(go())

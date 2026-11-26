@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -27,7 +28,7 @@ from agent_terminal.productivity import (
     save_prs,
     summarize,
 )
-from agent_terminal.prs import GhError, GhMissing
+from agent_terminal.prs import Gh, GhError, GhMissing
 from agent_terminal.settings import Settings
 
 TODAY = date(2026, 11, 25)
@@ -318,7 +319,7 @@ def drive(tmp_path: Path, gh: FakeGh, body) -> list[dict]:
             settings_in(tmp_path),
             sent.append,
             asyncio.get_running_loop(),
-            gh=gh,
+            gh=cast(Gh, gh),
             today=lambda: TODAY,
         )
         try:

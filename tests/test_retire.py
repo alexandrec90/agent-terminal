@@ -93,6 +93,20 @@ def test_the_plan_is_the_steps_and_notes_the_script_printed():
     }
 
 
+def test_a_plan_message_says_why_nothing_will_be_retired():
+    assert retire.plan_message(None, "not a devkit project") == {
+        "steps": [],
+        "notes": ["not a devkit project"],
+    }
+    assert retire.plan_message(None) == {"steps": [], "notes": []}
+    plan = retire.RetirePlan(steps=["unplug from the registry"], notes=["n"])
+    assert retire.plan_message(plan, "ignored") == {
+        "steps": ["unplug from the registry"],
+        "notes": ["n"],
+    }
+    assert retire.RetirePlan().to_dict() == {"steps": [], "notes": []}
+
+
 def test_nothing_after_the_plan_counts_as_a_step():
     lines = [*RADIO_RETIRE_DRY_RUN, "    an indented line from something else"]
     assert parse_plan(lines).steps == ["unplug from the registry"]

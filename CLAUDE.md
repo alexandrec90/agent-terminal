@@ -71,7 +71,7 @@ here is a fork that will disagree with it the first time either is edited.
   `importlib` inside the function that needs them, and fake them in tests.
 - A tab's status comes from OSC 7501 as the agents really send it. When an agent changes,
   capture a real session before changing `attention.py`; do not reason from its docs.
-  `trust.py` and `shipping.py` are the same: both read files other tools own.
+  `trust.py`, `shipping.py` and `rest.py` are the same: they read files other tools own.
 - Never write to an agent's trust record, `~/.claude.json` or `~/.codex/config.toml`: live
   sessions rewrite the first constantly, and trust is the user's decision on the agent's
   own screen. The app reads them, and only points the user at that screen.

@@ -28,6 +28,25 @@ function trustNote(agent, worktree) {
   return `First time here: ${name} will ask you to trust this folder.`;
 }
 
+// What stops the backend's account of a folder from taking a worktree, with the button
+// that would fix it; null when nothing does.
+function worktreeBlocker(folder) {
+  if (!folder?.exists) return null;
+  if (!folder.is_git) {
+    return {
+      note: "A worktree needs a git repository, and this folder isn't one.",
+      action: "Initialize git and commit this folder",
+    };
+  }
+  if (!folder.has_commits) {
+    return {
+      note: "A worktree needs a commit to start from, and this repository has none.",
+      action: "Commit this folder",
+    };
+  }
+  return null;
+}
+
 export class NewTabDialog {
   constructor(requests) {
     this.requests = requests;
@@ -252,23 +271,6 @@ export class NewTabDialog {
     return new FormData(this.form).get("agent");
   }
 
-  worktreeBlocker() {
-    if (!this.folder?.exists) return null;
-    if (!this.folder.is_git) {
-      return {
-        note: "A worktree needs a git repository, and this folder isn't one.",
-        action: "Initialize git and commit this folder",
-      };
-    }
-    if (!this.folder.has_commits) {
-      return {
-        note: "A worktree needs a commit to start from, and this repository has none.",
-        action: "Commit this folder",
-      };
-    }
-    return null;
-  }
-
   noteLines(blocker) {
     if (!this.requested) return [];
     if (!this.folder) return [];
@@ -283,7 +285,7 @@ export class NewTabDialog {
   }
 
   render() {
-    const blocker = this.worktreeBlocker();
+    const blocker = worktreeBlocker(this.folder);
     this.worktree.disabled = blocker !== null;
     this.worktree.checked = blocker === null && this.wantsWorktree;
     this.worktreeLabel.classList.toggle("disabled", blocker !== null);

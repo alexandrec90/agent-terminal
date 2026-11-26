@@ -1,5 +1,6 @@
-"""Sessions a group could bring back: every one the agents recorded in the group's folder,
-its repository's main checkout or any of its worktrees, and that no tab has open.
+"""Sessions a group could bring back: every one the user started in the group's folder,
+its repository's main checkout or any of its worktrees, and that no tab has open. A fixer
+the fix pass dispatched is the pass's, not the user's, so it is not offered.
 
 Read from the agents' own records, as `prompts.py` does for one tree, and from the files
 the shipping process leaves. A worktree that has been removed is not offered: an agent
@@ -15,12 +16,14 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, replace
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from agent_terminal import agents, gitinfo, shipping
 from agent_terminal.codex_sessions import recent_rollouts
 from agent_terminal.folders import display_name, resolve_folder
+from agent_terminal.own_prs import DISPATCHED_PREFIXES
 from agent_terminal.pr_board import PrBoard
 from agent_terminal.prompts import CODEX_LOOKBACK_SECONDS, claude_transcript_dir
 from agent_terminal.prs import MERGED
@@ -142,16 +145,39 @@ def claude_title(transcript: Path) -> str:
     return " ".join(title.split())[:TITLE_LENGTH]
 
 
+def is_dispatched(transcript: Path) -> bool:
+    """Whether the fix pass started this Claude session rather than the user: its first
+    prompt is the pass's own opening sentence."""
+    try:
+        with transcript.open("rb") as handle:
+            head = [handle.readline() for _ in range(TITLE_HEAD_LINES)]
+    except OSError:
+        return False
+    prompt = first_prompt(line.decode("utf-8", errors="replace") for line in head)
+    return prompt.startswith(DISPATCHED_PREFIXES)
+
+
+def _user_started(settings: Settings, session: PastSession) -> bool:
+    if session.agent != agents.CLAUDE:
+        return True  # no Codex fixer session has been seen to tell one apart by
+    directory = claude_transcript_dir(settings.claude_home, session.tree)
+    return not is_dispatched(directory / f"{session.session_id}.jsonl")
+
+
 def list_sessions(
     settings: Settings, folder: Path, open_ids: set[str], now: float | None = None
 ) -> list[PastSession]:
-    """The newest sessions in `folder`'s scope that no tab has open, newest first, titled.
+    """The newest sessions the user started in `folder`'s scope that no tab has open,
+    newest first, titled. A fixer the fix pass dispatched is not offered.
     Codex states no title that this app has seen a real session give, so it has none."""
     trees = scope_trees(folder)
     found = [s for tree in trees for s in claude_sessions(settings.claude_home, tree)]
     found += codex_sessions(settings.codex_home, trees, time.time() if now is None else now)
     unopened = [s for s in found if s.session_id not in open_ids]
-    newest = sorted(unopened, key=lambda s: s.last_active, reverse=True)[:MAX_SESSIONS]
+    ordered = sorted(unopened, key=lambda s: s.last_active, reverse=True)
+    # Lazily, so only as many heads are read as it takes to fill the list.
+    own = (s for s in ordered if _user_started(settings, s))
+    newest = list(islice(own, MAX_SESSIONS))
     return [replace(s, title=session_title(settings, s)) for s in newest]
 
 

@@ -23,6 +23,7 @@ from agent_terminal.history import (
     deployed_commits,
     describe,
     first_prompt,
+    is_dispatched,
     list_sessions,
     read_tree_facts,
     scope_trees,
@@ -54,6 +55,17 @@ TOOL_RESULT = {
 AI_TITLE = {"type": "ai-title", "aiTitle": "Installing app on this PC", "sessionId": "s"}
 CUSTOM_TITLE = {"type": "custom-title", "customTitle": "my name for it", "sessionId": "s"}
 LAST_PROMPT = {"type": "last-prompt", "lastPrompt": "the icon disappeared", "sessionId": "s"}
+# A fixer's transcript as the fix pass really leaves one (2026-11-25): setup records, a
+# title the pass gave it, then the pass's opening sentence as the first prompt.
+FIXER_TITLE = {"type": "custom-title", "customTitle": "fix: devkit upgrade", "sessionId": "s"}
+FIXER_PROMPT = {
+    "type": "user",
+    "entrypoint": "cli",
+    "message": {
+        "role": "user",
+        "content": "You are a fixer session, dispatched by the fix pass. Read .claude/fixer.md",
+    },
+}
 
 
 def lines(*records: dict[str, Any]) -> list[str]:
@@ -132,6 +144,23 @@ class TestClaudeTitle:
 
     def test_a_missing_transcript_has_no_title(self, tmp_path):
         assert claude_title(tmp_path / "gone.jsonl") == ""
+
+
+class TestDispatched:
+    def test_a_fixer_is_dispatched(self, tmp_path):
+        path = write_transcript(tmp_path, tmp_path / "t", "s", FIXER_TITLE, FIXER_PROMPT)
+        assert is_dispatched(path) is True
+
+    def test_a_users_session_is_not(self, tmp_path):
+        path = write_transcript(tmp_path, tmp_path / "t", "s", CARET, PROMPT, FIXER_PROMPT)
+        assert is_dispatched(path) is False
+
+    def test_a_session_with_no_prompt_yet_is_not(self, tmp_path):
+        path = write_transcript(tmp_path, tmp_path / "t", "s", CARET)
+        assert is_dispatched(path) is False
+
+    def test_a_missing_transcript_is_not(self, tmp_path):
+        assert is_dispatched(tmp_path / "gone.jsonl") is False
 
 
 @pytest.fixture
@@ -237,6 +266,22 @@ class TestListSessions:
         write_transcript(settings.claude_home, repository, "old", age=60)
         write_transcript(settings.claude_home, repository, "new")
         assert [s.session_id for s in list_sessions(settings, repository, set())] == ["new"]
+
+    def test_leaves_out_a_session_the_fix_pass_dispatched(self, settings, repository):
+        tree = add_worktree(repository, "fixer")
+        write_transcript(settings.claude_home, tree, "fixer", FIXER_TITLE, FIXER_PROMPT)
+        write_transcript(settings.claude_home, repository, "mine", PROMPT, age=60)
+        assert [s.session_id for s in list_sessions(settings, repository, set())] == ["mine"]
+
+    def test_a_session_that_only_mentions_the_fix_pass_later_is_kept(self, settings, repository):
+        write_transcript(settings.claude_home, repository, "mine", PROMPT, FIXER_PROMPT)
+        assert [s.session_id for s in list_sessions(settings, repository, set())] == ["mine"]
+
+    def test_fixers_do_not_use_up_the_limit(self, settings, repository, monkeypatch):
+        monkeypatch.setattr(history, "MAX_SESSIONS", 1)
+        write_transcript(settings.claude_home, repository, "mine", PROMPT, age=60)
+        write_transcript(settings.claude_home, repository, "fixer", FIXER_PROMPT)
+        assert [s.session_id for s in list_sessions(settings, repository, set())] == ["mine"]
 
     def test_finds_codex_sessions_by_their_folder(self, settings, repository, tmp_path):
         tree = add_worktree(repository, "a")

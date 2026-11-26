@@ -90,6 +90,32 @@ def test_every_item_is_asked_including_the_root(tmp_path):
     assert refused == [(tmp_path / "sub" / "file", recycle.ACCESS_DENIED)]
 
 
+def test_the_tree_is_the_root_and_everything_under_it(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "file").write_text("x")
+    items = list(recycle.tree(tmp_path))
+    assert items[0] == tmp_path
+    assert sorted(items[1:]) == [tmp_path / "sub", tmp_path / "sub" / "file"]
+
+
+def test_a_missing_root_is_still_yielded(tmp_path):
+    assert list(recycle.tree(tmp_path / "gone")) == [tmp_path / "gone"]
+
+
+def test_a_code_is_put_into_words():
+    assert recycle.meaning(recycle.ACCESS_DENIED) == "access is denied"
+    assert recycle.meaning(0x12345) == "see SHFileOperationW's return values"
+
+
+@pytest.mark.local
+def test_delete_refusal_asks_windows_and_deletes_nothing(tmp_path):
+    item = tmp_path / "file"
+    item.write_text("x")
+    assert recycle.delete_refusal(str(item)) == 0
+    assert item.exists()
+    assert recycle.delete_refusal(str(tmp_path / "gone")) != 0
+
+
 def test_nothing_is_deleted_off_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "linux")
     with pytest.raises(OSError, match="only on Windows"):

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     session_host: bool = True
     # How long the host keeps processes with no app connected before ending them.
     host_orphan_seconds: float = 3600.0
+    # How long a Claude tab sits idle and out of view before its process is ended, to be
+    # resumed when the tab is next shown. 0 never does.
+    sleep_after_seconds: float = 900.0
     # The branch the app's own checkout updates from, on `origin`.
     update_branch: str = "main"
     # How often to ask `origin` whether there is an update. A fetch each time.

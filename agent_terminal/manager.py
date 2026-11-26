@@ -24,13 +24,14 @@ from agent_terminal.prs import Gh
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.sessions import LocalSessions, SessionSource
 from agent_terminal.settings import Settings
+from agent_terminal.sleeper import Sleeper, SleeperLinks
 from agent_terminal.store import DebouncedSaver, SidebarWidth, Snapshot, Tab, load_snapshot
+from agent_terminal.terminal_requests import TerminalRequests
 
 log = logging.getLogger(__name__)
 
 # Resuming every agent at once slows the machine to a crawl; a gap keeps it responsive.
 RESTORE_GAP_SECONDS = 0.3
-DEFAULT_SIZE = (32, 120)
 
 
 def switch_view(tabs: list[Tab], leaving: str | None, arriving: str | None) -> str | None:
@@ -66,21 +67,21 @@ class TabManager:
         self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._groups = Groups(self._on_changed)
         self._sidebar = SidebarWidth(self._on_changed)
-        self._size = DEFAULT_SIZE
         self._restored = False
         self._saver = DebouncedSaver(loop, settings.state_file, self._snapshot)
         self.sessions: SessionSource = sessions or LocalSessions()
-        self.runner = TabRunner(
-            settings,
-            loop,
-            self.sessions,
-            RunnerEvents(
-                self._on_output,
-                self._on_changed,
-                self._on_clean_exit,
-                lambda tab_id: emit({"type": "reset", "id": tab_id}),
-            ),
+        events = RunnerEvents(
+            self._on_output,
+            self._on_changed,
+            self._on_clean_exit,
+            lambda tab_id: emit({"type": "reset", "id": tab_id}),
         )
+        self.runner = TabRunner(settings, loop, self.sessions, events)
+        self._terminal = TerminalRequests(self.runner, self._desktop, loop, emit, self._tab)
+        wake = SleeperLinks(
+            lambda: self._active_id, lambda: self._terminal.size, events.changed, events.reset
+        )
+        self.sleeper = Sleeper(settings, loop, self.runner, wake)
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
@@ -103,10 +104,8 @@ class TabManager:
             "sidebar_width": self._sidebar.on_width,
             "activate": self._on_activate,
             "toggle_park": self._on_toggle_park,
-            "input": self._on_input,
-            "resize": self._on_resize,
-            "paste": self._on_paste,
             "page_error": self._on_page_error,
+            **self._terminal.handlers(),
             **DesktopRequests(settings, emit, loop, self._desktop).handlers(),
             **self._pr_requests.handlers(),
             **LandRequests(self.board, self.runner, self._tab).handlers(),
@@ -119,8 +118,9 @@ class TabManager:
 
     async def handle(self, message: dict[str, Any]) -> None:
         """Apply one message. An unknown type or a tab already closed is logged and
-        dropped: both are ordinary when a click races a process exit. Anything else a
-        handler raises is logged with its traceback, and the app carries on."""
+        dropped: both are ordinary when a click races a process exit. What the machine
+        refuses -- a file, a process, a terminal -- is logged with its traceback, and the
+        app carries on. A bug in the app itself is raised, so it is seen."""
         handler = self._handlers.get(message.get("type", ""))
         if handler is None:
             log.warning("unknown message: %r", message.get("type"))
@@ -129,14 +129,14 @@ class TabManager:
             await handler(message)
         except (KeyError, ValueError, TypeError) as exc:
             log.warning("dropped %s message: %r", message.get("type"), exc)
-        except Exception:
+        except (OSError, RuntimeError):
             log.exception("%s message failed", message.get("type"))
 
     async def _on_page_error(self, message: dict[str, Any]) -> None:
         log.error("page error: %s", page_error_text(message))
 
     async def _on_hello(self, message: dict[str, Any]) -> None:
-        self._size = (int(message["rows"]), int(message["cols"]))
+        self._terminal.take_size(message)
         self._projects.send_projects()
         if self._restored:
             self._emit_state()
@@ -144,6 +144,7 @@ class TabManager:
         self._restored = True
         self.board.start()
         await self._restore()
+        self.sleeper.start()
 
     async def _on_create(self, message: dict[str, Any]) -> None:
         agent = message["agent"]
@@ -176,7 +177,7 @@ class TabManager:
         self._groups.opened(tab.project_path)
         self.runner.add(tab)
         self._on_changed()
-        await self.runner.start(tab, self._size)
+        await self.runner.start(tab, self._terminal.size)
         await self.board.scan()
 
     async def _open_or_show(self, tab: Tab) -> None:
@@ -210,21 +211,6 @@ class TabManager:
         tab.parked = not tab.parked
         self._on_changed()
 
-    async def _on_input(self, message: dict[str, Any]) -> None:
-        self.runner.input(message["id"], message["data"])
-
-    async def _on_resize(self, message: dict[str, Any]) -> None:
-        self._size = (int(message["rows"]), int(message["cols"]))
-        for live in self.runner.live.values():
-            live.size = self._size
-            live.session.resize(*self._size)
-
-    async def _on_paste(self, message: dict[str, Any]) -> None:
-        tab_id = self._tab(message["id"]).id
-        text = await self._loop.run_in_executor(None, self._desktop.read_clipboard)
-        # Back through the page: only xterm knows if the agent wants bracketed paste.
-        self._emit({"type": "paste", "id": tab_id, "text": text})
-
     def _tab(self, tab_id: str) -> Tab:
         for tab in self._tabs:
             if tab.id == tab_id:
@@ -235,6 +221,8 @@ class TabManager:
         self._emit({"type": "output", "id": tab_id, "data": text})
 
     def _on_changed(self) -> None:
+        # Here, as every way of going to a tab ends in this.
+        self.sleeper.wake_active()
         self._saver.schedule()
         self._emit_state()
 
@@ -279,7 +267,7 @@ class TabManager:
 
     async def _restore(self) -> None:
         """Bring back the saved tabs: each one's process if it outlived the last window,
-        and a resumed agent if not."""
+        and a resumed agent if not. One left asleep stays so, unless it is on screen."""
         snapshot = load_snapshot(self._settings.state_file)
         self._tabs = snapshot.tabs
         self._ordering.restore(snapshot.group_order)
@@ -294,10 +282,11 @@ class TabManager:
         adopted = []
         for tab in self._tabs:
             survivor = survivors.pop(tab.id, None)
+            tab.asleep = tab.asleep and survivor is None and tab.id != self._active_id
             if survivor is None:
                 self.runner.add(tab)
             else:
-                self.runner.adopt(tab, survivor).size = self._size
+                self.runner.adopt(tab, survivor).size = self._terminal.size
                 adopted.append((tab.id, survivor.screen))
         self._emit_state()
         for tab_id, screen in adopted:
@@ -309,8 +298,8 @@ class TabManager:
             log.info("ending process %s: its tab was closed", leftover.key)
             await self.sessions.discard(leftover)
         kept = {tab_id for tab_id, _ in adopted}
-        for tab in [tab for tab in self._tabs if tab.id not in kept]:
-            await self.runner.start(tab, self._size)
+        for tab in [tab for tab in self._tabs if tab.id not in kept and not tab.asleep]:
+            await self.runner.start(tab, self._terminal.size)
             await asyncio.sleep(RESTORE_GAP_SECONDS)
 
     async def shutdown(self, keep_processes: bool = False) -> None:
@@ -320,6 +309,7 @@ class TabManager:
         `keep_processes` is a restart's: every process is left running in the session
         host, with what the next window needs to carry on with it."""
         self.board.stop()
+        self.sleeper.stop()
         await self.runner.find_unfound_sessions()
         self._saver.save_now()
         if keep_processes:

@@ -257,7 +257,6 @@ class TestReader:
         reader = DeliveryReader(devkit, repo)
         merged = replace(MERGED, merge_commit=commit(repo, "a"))
         gate = reader.read(repo, "claude", repo, "", merged).gates[-1]
-        assert (gate.name, gate.state) == ("live", "pending")
-        assert gate.detail == delivery.OWN_LIVE_DETAILS["pending"]
+        assert gate == delivery.Gate("live", "pending", delivery.OWN_LIVE_DETAILS["pending"])
         restarted = DeliveryReader(devkit, repo)
         assert states(restarted.read(repo, "claude", repo, "", merged))["live"] == "passing"

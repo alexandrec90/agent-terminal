@@ -34,7 +34,6 @@ class ProjectRequests:
         desktop: Desktop,
         gh: Gh,
         open_folders: Callable[[], list[Path]],
-        retirement: Retirement | None = None,
     ) -> None:
         self._settings = settings
         self._emit = emit
@@ -42,7 +41,8 @@ class ProjectRequests:
         self._desktop = desktop
         self._gh = gh
         self._open_folders = open_folders
-        self._retirement = retirement or Retirement(settings)
+        # Replaced in tests, which run a fake devkit's script.
+        self._retirement = Retirement(settings)
         # One retire or restore at a time: two would race in devkit's registry.
         self._busy = False
 

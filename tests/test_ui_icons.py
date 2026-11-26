@@ -16,6 +16,7 @@ ICONS = {
     "finished",
     "parked",
     "exited",
+    "asleep",
     "pr-open",
     "pr-merged",
     "pr-closed",

@@ -61,10 +61,10 @@ class Rig:
         self.listed = 0
         self.script = FakeScript()
         self.requests = NewProjectRequests(
-            self.settings, self.sent.append, asyncio.get_running_loop(), self.list, self.script
+            self.settings, self.sent.append, asyncio.get_running_loop(), self.relist, self.script
         )
 
-    def list(self) -> None:
+    def relist(self) -> None:
         self.listed += 1
 
     async def send(self, kind: str, **fields: Any) -> None:

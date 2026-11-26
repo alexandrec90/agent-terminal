@@ -115,13 +115,30 @@ def git(checkout: Path, *args: str, run: Run = subprocess.run) -> str:
     return done.stdout.strip()
 
 
-def check_for_update(checkout: Path, branch: str, run: Run = subprocess.run) -> UpdateStatus:
-    """Fetch `branch` and say how far behind it the checkout is, and whether a fast
-    forward could catch it up."""
+def started_commit(checkout: Path, run: Run = subprocess.run) -> str:
+    """The commit the checkout is on, read as the app starts: the code this process runs.
+    "" if git cannot say."""
+    try:
+        return git(checkout, "rev-parse", "HEAD", run=run)
+    except RuntimeError as exc:
+        log.info("cannot read the commit the app started on: %s", exc)
+        return ""
+
+
+def check_for_update(
+    checkout: Path, branch: str, running: str = "", run: Run = subprocess.run
+) -> UpdateStatus:
+    """Fetch `branch` and say how many of its commits the running app lacks, and whether a
+    fast forward could catch the checkout up.
+
+    Counted from `running`, the commit the app started on, and not from HEAD: `land.py`
+    fast-forwards this same checkout the moment a PR merges, so HEAD is usually level with
+    origin while the process still runs the code it started with."""
     try:
         git(checkout, "fetch", "--quiet", "origin", branch, run=run)
         upstream = f"origin/{branch}"
-        behind = int(git(checkout, "rev-list", "--count", f"HEAD..{upstream}", run=run) or 0)
+        since = running or "HEAD"
+        behind = int(git(checkout, "rev-list", "--count", f"{since}..{upstream}", run=run) or 0)
         current = git(checkout, "rev-parse", "--abbrev-ref", "HEAD", run=run)
         ahead = int(git(checkout, "rev-list", "--count", f"{upstream}..HEAD", run=run) or 0)
         dirty = git(checkout, "status", "--porcelain", "--untracked-files=no", run=run)
@@ -160,8 +177,11 @@ class AppControl:
         restart: Restart,
         checkout: Path | None = None,
         source: Callable[[], Path | None] = installed_from,
+        head: Callable[[Path], str] = started_commit,
     ) -> None:
         self._settings = settings
+        # Read now, as the app starts: the checkout's HEAD moves on without it.
+        self._running = head(checkout) if checkout is not None else ""
         # Said once, at start: a copy outside a checkout stays that way until relaunched.
         self._cannot_update = "" if checkout is not None else cannot_update(source())
         self._emit = emit
@@ -170,7 +190,7 @@ class AppControl:
         self._restart = restart
         self._checkout = checkout
         # Replaced in tests, which have no `origin` to ask.
-        self._check: Callable[[Path, str], UpdateStatus] = check_for_update
+        self._check: Callable[[Path, str, str], UpdateStatus] = check_for_update
         self._update = UpdateStatus()
         self._notice = read_update_result(settings.update_result_file)
         self._task: asyncio.Task[None] | None = None
@@ -200,7 +220,7 @@ class AppControl:
         if self._checkout is None:
             return
         self._update = await self._loop.run_in_executor(
-            None, self._check, self._checkout, self._settings.update_branch
+            None, self._check, self._checkout, self._settings.update_branch, self._running
         )
         if self._update.error:
             log.info("update check failed: %s", self._update.error)

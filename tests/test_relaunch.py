@@ -13,6 +13,7 @@ from agent_terminal.relaunch import (
     main,
     parse_args,
     relaunch_argv,
+    update_detail,
     update_steps,
     wait_for_exit,
 )
@@ -135,6 +136,14 @@ def test_main_updates_records_and_starts_the_app(tmp_path, monkeypatch):
     assert record["ok"] is True
     assert record["detail"] == "aaa → bbb"
     assert started[0][1:] == ["-m", "agent_terminal"]
+
+
+def test_an_update_with_nothing_to_pull_names_the_commit_it_restarted_on():
+    assert update_detail("bbb", "bbb") == "now running bbb"
+
+
+def test_an_update_that_pulled_names_both_commits():
+    assert update_detail("aaa", "bbb") == "aaa → bbb"
 
 
 def test_main_without_update_just_starts_the_app(tmp_path, monkeypatch):

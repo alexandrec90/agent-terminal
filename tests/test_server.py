@@ -274,6 +274,7 @@ def test_a_page_says_hello_and_hears_the_projects(backend):
             "kept": [],
             "folded": [],
             "hidden": [],
+            "sidebar_width": None,
         }
 
     asyncio.run(body())

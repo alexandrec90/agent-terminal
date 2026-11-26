@@ -26,6 +26,7 @@ Starting it a second time brings the running window forward.
 | Leave a tab for later | Right-click it. It greys out; right-click again to undo |
 | Close a session | **×** on the tab |
 | Fold a group | Click its heading; folded, it shows a count, amber or blue if a session wants you |
+| Resize the sidebar | Drag its edge; double-click the edge to reset. The width is kept between launches |
 | Close a group | **×** on its heading (on hover): closes every session in it after asking, and hides its PRs until a session opens there |
 | Clone a repository | **+ New group** → **Clone one of your GitHub repositories…**: lists yours not yet in the projects root |
 | Create a project | **+ New group** → **Create a new project from devkit…**: a name, a preset and whether to make its public GitHub repo. **Preview** shows the plan and writes nothing; **Create** runs devkit's `new-project.py` and chooses the new project. The run is kept in `new-project.log` in the data folder |

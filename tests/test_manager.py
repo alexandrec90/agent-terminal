@@ -503,6 +503,7 @@ async def test_closing_the_last_tab_leaves_nothing_active(rig):
         "kept": [{"path": repo, "name": rig.repo.resolve().name}],
         "folded": [],
         "hidden": [],
+        "sidebar_width": None,
     }
 
 
@@ -618,6 +619,32 @@ async def test_folded_and_hidden_groups_survive_a_restart(rig):
     again = TabManager(rig.settings, rig.messages.append, rig.loop, sessions)
     await again.handle({"type": "hello", "rows": 30, "cols": 100})
     assert (rig.state()["folded"], rig.state()["hidden"]) == (["C:\\a"], ["C:\\b"])
+
+
+@run
+async def test_the_sidebar_width_survives_a_restart(rig):
+    await rig.hello()
+    assert rig.state()["sidebar_width"] is None
+    await rig.manager.handle({"type": "sidebar_width", "width": 400})
+    assert rig.state()["sidebar_width"] == 400
+    await rig.manager.shutdown()
+    assert load_snapshot(rig.settings.state_file).sidebar_width == 400
+
+    sessions = LocalSessions(rig.spawn, rig.killed.append)
+    again = TabManager(rig.settings, rig.messages.append, rig.loop, sessions)
+    await again.handle({"type": "hello", "rows": 30, "cols": 100})
+    assert rig.state()["sidebar_width"] == 400
+
+
+@run
+async def test_the_sidebar_width_resets_and_a_bad_one_is_dropped(rig):
+    await rig.hello()
+    await rig.manager.handle({"type": "sidebar_width", "width": 400})
+    for message in ({"width": "wide"}, {"width": True}, {}):
+        await rig.manager.handle({"type": "sidebar_width", **message})
+        assert rig.state()["sidebar_width"] == 400
+    await rig.manager.handle({"type": "sidebar_width", "width": None})
+    assert rig.state()["sidebar_width"] is None
 
 
 @pytest.mark.parametrize("kind", ["close_group", "fold_group"])

@@ -356,6 +356,37 @@ def test_a_group_folds_to_its_heading_and_back(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_the_sidebar_keeps_the_width_the_user_gave_it(tmp_path):
+    width = "document.getElementById('sidebar').getBoundingClientRect().width"
+
+    async def body(_app: App, window: Window) -> None:
+        tab_id = await open_tab(window, "alpha")
+        before = await window.js(width)
+        # As wide as a session's title can ask for: it must be cut, not widen the column.
+        await window.js(
+            f"document.querySelector('[data-id=\"{tab_id}\"] .tab-title').textContent ="
+            " 'long title '.repeat(40)"
+        )
+        assert await window.js(width) == before
+        await window.click('[data-project="alpha"] .group-head')
+        folded = "document.querySelector('[data-project=\"alpha\"]').classList.contains('folded')"
+        await window.wait(folded, "the group to fold")
+        assert await window.js(width) == before
+
+        await window.drag_by("#sidebar-edge", 80)
+        await window.wait(f"{width} === {before + 80}", "the sidebar to widen")
+        # Whatever the pointer asks for, it stays wide enough to use.
+        await window.drag_by("#sidebar-edge", -340)
+        await window.wait(f"{width} === 180", "the sidebar to stop at its least")
+        await window.js(
+            "document.getElementById('sidebar-edge')"
+            ".dispatchEvent(new MouseEvent('dblclick', {bubbles: true}))"
+        )
+        await window.wait(f"{width} === {before}", "the default width")
+
+    scenario(tmp_path, body)
+
+
 def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
     async def body(_app: App, window: Window) -> None:
         tab = await open_tab(window, "alpha")

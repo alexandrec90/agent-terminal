@@ -15,6 +15,8 @@ log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 SAVE_DELAY_SECONDS = 0.5
+# As the page's own limit. It keeps to its window's width too, which is not known here.
+MIN_SIDEBAR_WIDTH = 180
 
 
 @dataclass
@@ -60,6 +62,8 @@ class Snapshot:
     # Groups that stay in the sidebar with no tab, until closed. None in a file from
     # before they were kept.
     kept: list[str] | None = None
+    # In CSS pixels; None until the user drags it, for the page's default.
+    sidebar_width: int | None = None
 
 
 def paths_of(value: object) -> list[str]:
@@ -68,6 +72,32 @@ def paths_of(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def clean_sidebar_width(value: object) -> int | None:
+    """`value` as a sidebar width, never too narrow to use. None for anything but a whole
+    number, which a file from before it was kept also gives."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return max(value, MIN_SIDEBAR_WIDTH)
+
+
+class SidebarWidth:
+    """The width the user dragged the sidebar to; None is the page's default."""
+
+    def __init__(self, changed: Callable[[], None]) -> None:
+        self._changed = changed
+        self.value: int | None = None
+
+    async def on_width(self, message: dict[str, Any]) -> None:
+        """Keep the width a `sidebar_width` message names. Raises `ValueError` for
+        anything but a whole number or None."""
+        wanted = message["width"]
+        width = clean_sidebar_width(wanted)
+        if width is None and wanted is not None:
+            raise ValueError(f"not a sidebar width: {wanted!r}")
+        self.value = width
+        self._changed()
 
 
 def tab_from_dict(data: dict[str, Any]) -> Tab:
@@ -103,6 +133,7 @@ def parse_snapshot(text: str) -> Snapshot:
         folded=paths_of(data.get("folded")),
         hidden=paths_of(data.get("hidden")),
         kept=None if data.get("kept") is None else paths_of(data["kept"]),
+        sidebar_width=clean_sidebar_width(data.get("sidebar_width")),
     )
 
 
@@ -140,6 +171,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
         "folded": snapshot.folded,
         "hidden": snapshot.hidden,
         "kept": snapshot.kept,
+        "sidebar_width": snapshot.sidebar_width,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

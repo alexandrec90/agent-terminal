@@ -23,7 +23,7 @@ from agent_terminal.prs import Gh
 from agent_terminal.runner import RunnerEvents, TabRunner
 from agent_terminal.sessions import LocalSessions, SessionSource
 from agent_terminal.settings import Settings
-from agent_terminal.store import DebouncedSaver, Snapshot, Tab, load_snapshot
+from agent_terminal.store import DebouncedSaver, SidebarWidth, Snapshot, Tab, load_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class TabManager:
         self._active_id: str | None = None
         self._ordering = Ordering(lambda: self._tabs, self._on_changed)
         self._groups = Groups(self._on_changed)
+        self._sidebar = SidebarWidth(self._on_changed)
         self._size = DEFAULT_SIZE
         self._restored = False
         self._saver = DebouncedSaver(loop, settings.state_file, self._snapshot)
@@ -98,6 +99,7 @@ class TabManager:
                 self._groups.close(message, self._tabs)
             ),
             "fold_group": self._groups.on_fold,
+            "sidebar_width": self._sidebar.on_width,
             "activate": self._on_activate,
             "toggle_park": self._on_toggle_park,
             "input": self._on_input,
@@ -250,6 +252,7 @@ class TabManager:
                 "tabs": tabs,
                 "group_order": self._ordering.group_order,
                 "prs": self.board.plain_prs(),
+                "sidebar_width": self._sidebar.value,
                 **self._groups.state_fields(),
             }
         )
@@ -263,6 +266,7 @@ class TabManager:
             folded=groups["folded"],
             hidden=groups["hidden"],
             kept=groups["kept"],
+            sidebar_width=self._sidebar.value,
         )
 
     async def _restore(self) -> None:
@@ -272,6 +276,7 @@ class TabManager:
         self._tabs = snapshot.tabs
         self._ordering.restore(snapshot.group_order)
         self._groups.restore(snapshot.folded, snapshot.hidden, snapshot.kept, self._tabs)
+        self._sidebar.value = snapshot.sidebar_width
         ids = {tab.id for tab in self._tabs}
         fallback = self._tabs[0].id if self._tabs else None
         self._active_id = snapshot.active_id if snapshot.active_id in ids else fallback

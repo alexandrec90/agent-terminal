@@ -363,6 +363,15 @@ button {
   transform: rotate(-90deg);
 }
 
+/* An empty group has nothing to fold: no chevron, and its heading is no toggle. */
+.group-fold.empty {
+  visibility: hidden;
+}
+
+.group-head.empty {
+  cursor: default;
+}
+
 .group-name {
   flex: 1;
   overflow: hidden;

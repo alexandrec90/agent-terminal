@@ -80,9 +80,7 @@ def test_a_status_error_that_clears_and_returns_is_logged_again(logged):
 
 def test_a_failed_update_notice_is_an_error():
     notice = {"ok": False, "step": "pull", "detail": "not a fast-forward"}
-    assert carried_errors({"type": "app", "notice": notice}) == [
-        "pull failed: not a fast-forward"
-    ]
+    assert carried_errors({"type": "app", "notice": notice}) == ["pull failed: not a fast-forward"]
     assert carried_errors({"type": "app", "notice": {"ok": True, "step": "pull"}}) == []
 
 

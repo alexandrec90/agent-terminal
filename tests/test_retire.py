@@ -99,7 +99,10 @@ def test_nothing_after_the_plan_counts_as_a_step():
 
 
 def test_a_plan_with_no_steps_is_empty():
-    assert parse_plan(["  retire x will:", "  NOTE    not in the registry", "  nothing changed"]).steps == []
+    assert (
+        parse_plan(["  retire x will:", "  NOTE    not in the registry", "  nothing changed"]).steps
+        == []
+    )
 
 
 def test_the_reason_is_the_scripts_error_line():
@@ -196,8 +199,18 @@ def test_the_retired_list_is_the_scripts_record(tmp_path):
     record.write_text(
         json.dumps(
             {
-                "tvshell": {"collector": None, "services": [], "tasks": [], "retired_at": "2026-11-25T18:00:00"},
-                "radio": {"collector": "run", "services": ["app"], "tasks": [], "retired_at": "2026-11-24T09:00:00"},
+                "tvshell": {
+                    "collector": None,
+                    "services": [],
+                    "tasks": [],
+                    "retired_at": "2026-11-25T18:00:00",
+                },
+                "radio": {
+                    "collector": "run",
+                    "services": ["app"],
+                    "tasks": [],
+                    "retired_at": "2026-11-24T09:00:00",
+                },
             }
         ),
         encoding="utf-8",

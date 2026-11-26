@@ -100,7 +100,9 @@ class ProjectRequests:
         if not self._retirement.available():
             return plan_message(None, f"{self._retirement.missing()}: only the folder moves.")
         if not Retirement.takes(name):
-            return plan_message(None, f"{name} is not a devkit project name: only the folder moves.")
+            return plan_message(
+                None, f"{name} is not a devkit project name: only the folder moves."
+            )
         return plan_message(self._retirement.plan(name))
 
     async def _on_describe_deletion(self, message: dict[str, Any]) -> None:
@@ -114,9 +116,7 @@ class ProjectRequests:
         except (ValueError, OSError, RetireError) as exc:
             self._emit({**reply, "error": str(exc)})
             return
-        self._emit(
-            {**reply, "name": folder.name, "risks": risks, "retire": retire, "error": ""}
-        )
+        self._emit({**reply, "name": folder.name, "risks": risks, "retire": retire, "error": ""})
 
     def _retire_then_recycle(self, folder: Path, force: bool) -> None:
         """Retire first: it has the gates (unpushed work, a live box), and a refusal there

@@ -510,7 +510,7 @@ def test_a_new_project_can_be_made_from_the_dialog(tmp_path):
 
 
 def test_deleting_a_project_says_what_is_unsaved_and_refuses_one_in_use(tmp_path):
-    async def body(_app: App, window: Window) -> None:
+    async def body(app: App, window: Window) -> None:
         await open_tab(window, "alpha")
         await window.click("#new-group")
         delete = "[...document.querySelectorAll('.project-item')].find(i => i.textContent === {0}).querySelector('.project-delete').click()"
@@ -527,6 +527,85 @@ def test_deleting_a_project_says_what_is_unsaved_and_refuses_one_in_use(tmp_path
         await window.wait(f"!{message}.hidden", "the refusal")
         assert "close it first" in await window.js(f"{message}.textContent")
         assert await window.js("document.getElementById('confirm').open") is False
+        # Kept after the dialog closes: the line in it is gone with it.
+        assert "alpha has a tab open; close it first" in app_log(app)
+
+    scenario(tmp_path, body)
+
+
+FAKE_RETIRE_PROJECT = """
+import json, os, pathlib, sys
+verb, name = sys.argv[1], sys.argv[2]
+print(f"  {verb} {name} will:")
+print("    unplug from the registry" if verb == "retire" else "    plug into the registry")
+if "--yes" in sys.argv and verb == "restore":
+    (pathlib.Path(os.environ["AGENT_TERMINAL_PROJECTS_ROOT"]) / name).mkdir()
+    record = pathlib.Path(__file__).resolve().parents[1] / "logs" / "retired-projects.json"
+    record.write_text(json.dumps({}), encoding="utf-8")
+"""
+
+
+def install_retire(app: App, *retired: str) -> None:
+    (app.devkit / "scripts").mkdir(parents=True, exist_ok=True)
+    (app.devkit / "scripts" / "retire-project.py").write_text(FAKE_RETIRE_PROJECT, "utf-8")
+    (app.devkit / "logs").mkdir(exist_ok=True)
+    record = {name: {"retired_at": "2026-11-25T18:00:00"} for name in retired}
+    (app.devkit / "logs" / "retired-projects.json").write_text(json.dumps(record), "utf-8")
+
+
+def test_deleting_says_what_devkit_will_retire_first(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        install_retire(app)
+        await window.click("#new-group")
+        delete = "[...document.querySelectorAll('.project-item')].find(i => i.textContent === 'beta').querySelector('.project-delete').click()"
+        await window.js(delete)
+        await window.wait("document.getElementById('confirm').open", "the confirmation")
+        text = await window.js("document.getElementById('confirm-text').textContent")
+        assert "retire-project.py will:" in text
+        assert "unplug from the registry" in text
+        # Cancelled: nothing here may reach the real Recycle Bin.
+        await window.click("#confirm-cancel")
+
+    scenario(tmp_path, body)
+
+
+def test_a_retired_project_is_restored_from_the_dialog(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        install_retire(app, "gone")
+        await window.click("#new-group")
+        await window.click("#retired-toggle")
+        row = "document.querySelector('#retired-list [data-project=\"gone\"] button')"
+        await window.wait(row, "the retired project")
+        await window.js(f"{row}.click()")
+        await window.wait("document.getElementById('confirm').open", "the confirmation")
+        await window.click("#confirm-ok")
+        selected = "document.querySelector('.project.selected')?.textContent"
+        assert await window.wait(selected, "the restored project to be chosen") == "gone"
+        assert (app.projects / "gone").is_dir()
+        empty = "document.getElementById('retired-status').textContent"
+        await window.wait(f"{empty}.includes('Nothing is retired')", "the emptied list")
+
+    scenario(tmp_path, body)
+
+
+def app_log(app: App) -> str:
+    log = app.base / "data" / "agent-terminal.log"
+    return log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_a_script_error_on_the_page_reaches_the_app_log(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        await window.js("setTimeout(() => { throw new Error('probe-page-error'); })")
+        # `void`, so the evaluation does not await it and the rejection goes unhandled.
+        await window.js("void Promise.reject(new Error('probe-rejection'))")
+        deadline = asyncio.get_running_loop().time() + 10
+        while "probe-rejection" not in app_log(app):
+            if asyncio.get_running_loop().time() > deadline:
+                pytest.fail(f"page errors never reached the log:\n{app_log(app)}")
+            await asyncio.sleep(0.2)
+        text = app_log(app)
+        assert "page error: Uncaught Error: probe-page-error" in text
+        assert "page error: unhandled rejection: probe-rejection" in text
 
     scenario(tmp_path, body)
 

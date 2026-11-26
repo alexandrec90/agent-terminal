@@ -241,9 +241,7 @@ def describe(
     first_prs = min(prs, default=today) if prs is not None else today
     first = min(first_prompts, first_prs, today)
 
-    def series(
-        prompts: Mapping[date, int], prs: Mapping[date, int] | None
-    ) -> dict[str, Any]:
+    def series(prompts: Mapping[date, int], prs: Mapping[date, int] | None) -> dict[str, Any]:
         days = []
         for offset in range((today - first).days + 1):
             day = first + timedelta(days=offset)

@@ -253,6 +253,17 @@ export function span(className, text) {
   return element;
 }
 
+// A title cut to "..." by CSS shows in full on hover. Only when cut, so a title that
+// fits leaves the row's own hint to show.
+export function fullOnHover(element) {
+  element.addEventListener("mouseenter", () => {
+    const cut = element.scrollWidth > element.clientWidth;
+    if (cut) element.title = element.textContent;
+    else element.removeAttribute("title");
+  });
+  return element;
+}
+
 // The icon says where the PR stands; the text says which PR, and names any state the
 // icon alone would leave a guess.
 export function prChipFace(pr) {
@@ -306,7 +317,7 @@ function renderTab(tab, groupTabs, activeId, actions) {
 
   const main = span("tab-main", "");
   const line = span("tab-line", "");
-  line.append(span("tab-title", tab.title || tab.agent), timeLabel(tab));
+  line.append(fullOnHover(span("tab-title", tab.title || tab.agent)), timeLabel(tab));
   main.append(line, span("tab-meta", tabMeta(tab)));
   const chips = tabChips(tab, actions);
   if (chips.length) {

@@ -40,7 +40,7 @@ class LiveTab:
     status: str = attention.STARTING
     started_at: float = field(default_factory=time.time)
     user_engaged: bool = False
-    # On the agent's trust screen. Neither agent reports a state until past it.
+    # On the agent's trust screen. Claude reports `blocked` there; a state past it ends it.
     awaiting_trust: bool = False
     # Claude is running plain only to ask, and the tab's real start waits on the answer.
     worktree_after_trust: bool = False
@@ -315,8 +315,12 @@ class TabRunner:
         return changed
 
     def _past_trust(self, live: LiveTab, state: str) -> None:
-        """The agent's first state answers its trust screen: `clear` if it was declined,
-        since the agent has gone, and anything else if it went on."""
+        """The first state after the trust screen answers it: `clear` if it was declined,
+        since the agent has gone, and anything else if it went on. `blocked` is the
+        screen itself, which Claude Code 2.1.332 reports as
+        `state=blocked:kind=permission:msg=<"trust this folder">` while it waits."""
+        if state == attention.BLOCKED:
+            return
         live.awaiting_trust = False
         if not live.worktree_after_trust:
             return

@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-"""The local end-to-end tier: every test that needs this workstation rather than a runner.
+"""The end-to-end tiers: every test that needs more than the Linux gate's ordinary suite.
 
-devkit's nightly `devkit-local-e2e` job runs this in the checkout, and
-`.claude/rules/local-e2e.md` is the contract: exit 0 green, anything else red, each failing
-test printed as pytest's `FAILED <id>` line. What it runs is every test marked `local`,
-which `addopts` in `pyproject.toml` deselects from every other run. The gate is Linux, so
-anything that needs Windows itself is in this tier.
+Two markers, both deselected by `addopts` in `pyproject.toml` from every other run:
+
+- `local` (no flag): tests that need this workstation -- its logins, its live data, its
+  hardware. devkit's nightly `devkit-local-e2e` job runs this in the checkout, and
+  `.claude/rules/local-e2e.md` is the contract. **This project has none today**, so
+  `.devkit.toml` sets `[delivery] e2e = "ci"` and the nightly job records the project as
+  running in CI; a bare run here is red as an empty run.
+- `ci_e2e` (`--ci`): tests that need Windows itself -- the real window over WebView2,
+  ConPTY, a console, the shell's window properties, the Recycle Bin's API -- but nothing
+  of this PC: each runs on temp folders, a fake agent and a fake `gh`. The `E2E` job in
+  `.github/workflows/pr-gate.yml` runs `python scripts/e2e.py --ci` on `windows-latest`,
+  on the default branch, with `DEVKIT_E2E=1`.
+
+Both runs keep the one contract: exit 0 green, anything else red, each failing test
+printed as pytest's `FAILED <id>` line, which is what devkit's fix pass groups by.
 
 **A skip is a failure when the scheduler runs it** (`DEVKIT_E2E` set): the checkout is the
 one the tests were written for, so nothing has a reason left to skip, and each skip is
@@ -16,7 +26,7 @@ the run.
 reported as a pass.
 
 **Test ids on the command line run those alone, still inside the tier**, which is how a
-fixer reproduces one `FAILED` line.
+fixer reproduces one `FAILED` line: `python scripts/e2e.py --ci tests/e2e/test_app.py::<name>`.
 
 pytest runs under the checkout's `.venv` where it has one, else through `uv run` with
 the `dev` extras (`runner_argv`), and this script stays
@@ -42,6 +52,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 ENV_FLAG = "DEVKIT_E2E"
 MARKER = "local"
+# `--ci` selects this instead: the end-to-end tests a hosted Windows runner can run.
+CI_FLAG = "--ci"
+CI_MARKER = "ci_e2e"
 JUNIT = Path("logs") / "e2e-junit.xml"
 VENV_INTERPRETERS = (Path(".venv") / "Scripts" / "python.exe", Path(".venv") / "bin" / "python")
 # uv's switch for "run in the environment as it stands".
@@ -116,7 +129,16 @@ def first_line(message: str) -> str:
     return message.strip().splitlines()[0] if message.strip() else "no reason"
 
 
-def verdict(code: int, found: list[Case], strict: bool) -> tuple[int, list[str]]:
+def split_args(argv: Sequence[str]) -> tuple[str, list[str]]:
+    """The marker a run selects (`ci_e2e` under `--ci`, else `local`) and the test ids
+    it names."""
+    marker = CI_MARKER if CI_FLAG in argv else MARKER
+    return marker, [arg for arg in argv if arg != CI_FLAG]
+
+
+def verdict(
+    code: int, found: list[Case], strict: bool, marker: str = MARKER
+) -> tuple[int, list[str]]:
     """`(exit code, lines to print)` for pytest's `code` and the cases it reported.
 
     pytest already printed its own `FAILED` lines; these add what it words differently, an
@@ -135,7 +157,7 @@ def verdict(code: int, found: list[Case], strict: bool) -> tuple[int, list[str]]
         for case in skips
     ]
     if not ran:
-        return code or 1, [*lines, f"e2e: no {MARKER} test executed, which is not a pass"]
+        return code or 1, [*lines, f"e2e: no {marker} test executed, which is not a pass"]
     if strict and skips:
         return code or 1, [*lines, f"e2e: {len(skips)} test(s) skipped under the scheduled run"]
     return code, lines
@@ -170,7 +192,11 @@ def run_env(env: Mapping[str, str], root: Path) -> dict[str, str]:
     return out
 
 
-def pytest_argv(python: str | Sequence[str], report: Path, named: Sequence[str] = ()) -> list[str]:
+def pytest_argv(
+    python: str | Sequence[str], report: Path, named: Sequence[str] = (), marker: str = MARKER
+) -> list[str]:
+    # `-m` given here replaces the `-m "not local and not ci_e2e"` in `addopts`: the last
+    # one wins.
     start = [python] if isinstance(python, str) else list(python)
     return [
         *start,
@@ -178,7 +204,7 @@ def pytest_argv(python: str | Sequence[str], report: Path, named: Sequence[str] 
         "pytest",
         *(named or ["tests"]),
         "-m",
-        MARKER,
+        marker,
         "-rfE",
         "-p",
         "no:cacheprovider",
@@ -187,7 +213,7 @@ def pytest_argv(python: str | Sequence[str], report: Path, named: Sequence[str] 
 
 
 def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
-    named = sys.argv[1:] if argv is None else argv
+    marker, named = split_args(sys.argv[1:] if argv is None else argv)
     report = REPO_ROOT / JUNIT
     report.parent.mkdir(parents=True, exist_ok=True)
     report.unlink(missing_ok=True)
@@ -196,7 +222,7 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     # hidden console it was given, not to the pipe the pass reads. Passed on as bytes, so
     # no character pytest printed can raise on the way through a narrower stdout encoding.
     done = run(
-        pytest_argv(python, report, named),
+        pytest_argv(python, report, named, marker),
         cwd=REPO_ROOT,
         env=run_env(os.environ, REPO_ROOT),
         stdout=subprocess.PIPE,
@@ -207,7 +233,7 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     sys.stdout.flush()
     sys.stdout.buffer.write(done.stdout or b"")
     sys.stdout.buffer.flush()
-    code, lines = verdict(done.returncode, cases(report), scheduled())
+    code, lines = verdict(done.returncode, cases(report), scheduled(), marker)
     for line in lines:
         print(line, flush=True)
     print(f"e2e: exit {code}, report in {JUNIT.as_posix()}", flush=True)

@@ -110,7 +110,7 @@ def test_off_windows_there_is_nothing_to_claim(monkeypatch, platform):
     assert taskbar.find_app_window() is None
 
 
-@pytest.mark.local
+@pytest.mark.ci_e2e  # the real shell property store on a window of its own; no PC state
 def test_the_shell_keeps_what_is_written_on_a_real_window():
     """The vtable slots and PROPVARIANT layout only prove out against the real shell."""
     import ctypes

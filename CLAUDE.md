@@ -78,9 +78,13 @@ here is a fork that will disagree with it the first time either is edited.
 - No test may reach the real `gh`. `gh_command` in test settings names a command that
   cannot run, which turns the PR board off, or `tests/e2e/fake_gh.py`. A real merge or
   close is outward-facing: real-repository checks are read-only.
-- A test that needs this machine (Windows itself, since the gate is Linux) takes the
-  `local` marker: `addopts` deselects it and only `python scripts/e2e.py` runs it. See
-  `.claude/rules/local-e2e.md`. The window itself is `tests/e2e/`.
+- A test that needs Windows itself (the other gate jobs are Linux) but nothing of this
+  PC takes the `ci_e2e` marker: `addopts` deselects it, and `python scripts/e2e.py --ci`
+  runs it, in `PR Gate`'s `E2E` job on `windows-latest` on the default branch. The window
+  itself is `tests/e2e/`. Only a test that needs *this* workstation (its logins, live
+  data, hardware) takes `local`, run nightly by `python scripts/e2e.py` (see
+  `.claude/rules/local-e2e.md`); none does today, so `.devkit.toml` sets
+  `[delivery] e2e = "ci"`.
 - Never read a terminal's text from the DOM: WebGL paints to a canvas. Tests use
   `window.__agentTerminal.screen(id)`.
 

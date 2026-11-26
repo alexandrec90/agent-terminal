@@ -56,7 +56,7 @@ def test_the_entry_has_room_for_a_path():
     assert ProcessEntry.szExeFile.size >= 260
 
 
-@pytest.mark.local
+@pytest.mark.ci_e2e  # Windows' process snapshot; any Windows runner has one
 def test_a_real_child_is_found_with_its_start_time():
     child = subprocess.Popen([sys.executable, "-c", "input()"], stdin=subprocess.PIPE)
     try:

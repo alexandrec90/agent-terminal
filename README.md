@@ -160,7 +160,7 @@ matched to the wrong tab.
 
 ```bash
 python scripts/run-tests.py     # the tests for what changed
-python scripts/e2e.py           # the real window, driven over DevTools (needs a desktop)
+python scripts/e2e.py --ci      # the real window, driven over DevTools (needs Windows)
 ```
 
 `tests/e2e/` runs the real app with `tests/e2e/fake_agent.py` in place of an agent CLI and
@@ -198,7 +198,7 @@ agent_terminal/              the app
   server.py                  the loopback server the window's page talks to
   store.py                   the session file
   web/                       the page; web/vendor/ is xterm.js
-tests/                       tests; tests/e2e/ is the local tier
+tests/                       tests; tests/e2e/ is the window, in the ci_e2e tier
 scripts/                     project scripts (Python, each with tests)
 scripts/hooks/               vendored agent harness — edit upstream in devkit
 .devkit.toml                 the per-project harness seam (NOT vendored)
@@ -212,9 +212,11 @@ every PR. The drift check is only meaningful when it can see devkit — if it pr
 where `DEVKIT_DIR` is usually unset, `pre-commit run devkit-drift --all-files` is the
 same check against the devkit rev pinned in `.pre-commit-config.yaml`.
 
-Tests a hosted runner cannot run are marked `local`, which plain `pytest` and the gate
-deselect. `python scripts/e2e.py` runs that tier here, and devkit's nightly
-`devkit-local-e2e` job runs it on the default branch; a red run reaches the fix pass.
+Tests that need Windows itself are marked `ci_e2e`, which plain `pytest` and the Linux
+jobs deselect. The gate's `E2E` job runs them with `python scripts/e2e.py --ci` on
+`windows-latest`, on the default branch only; a red run reaches the fix pass. Tests only
+this workstation could run would be marked `local` and run nightly by devkit's
+`devkit-local-e2e` job; none is, so `.devkit.toml` sets `[delivery] e2e = "ci"`.
 
 `.github/dependabot.yml` opens weekly dependency PRs, and
 `.github/workflows/dependabot-automerge.yml` merges every one of them once the gate

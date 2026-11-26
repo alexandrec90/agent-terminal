@@ -107,7 +107,7 @@ def test_a_code_is_put_into_words():
     assert recycle.meaning(0x12345) == "see SHFileOperationW's return values"
 
 
-@pytest.mark.local
+@pytest.mark.ci_e2e  # the real SHFileOperationW on a temp file; any Windows runner has it
 def test_delete_refusal_asks_windows_and_deletes_nothing(tmp_path):
     item = tmp_path / "file"
     item.write_text("x")

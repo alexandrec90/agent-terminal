@@ -86,30 +86,6 @@ def test_add_shows_a_tab_before_its_process_exists(tmp_path):
     run(tmp_path, body)
 
 
-def test_typing_is_use_and_leaves_a_draft_until_sent(tmp_path):
-    async def body(rig: Rig) -> None:
-        live = rig.runner.add(make_tab(tmp_path))
-        live.used_at = 0.0
-        rig.runner.input("t", "h")
-        assert live.drafting
-        assert live.used_at > 0
-        rig.runner.input("t", "\r")
-        assert not live.drafting
-
-    run(tmp_path, body)
-
-
-def test_a_reported_status_is_use(tmp_path):
-    async def body(rig: Rig) -> None:
-        live = rig.runner.add(make_tab(tmp_path))
-        live.used_at = 0.0
-        rig.runner.receive(live, "\x1b]7501;state=idle\x1b\\")
-        await asyncio.sleep(0)
-        assert live.used_at > 0
-
-    run(tmp_path, body)
-
-
 def test_receive_leaves_the_query_to_the_session(tmp_path):
     async def body(rig: Rig) -> None:
         live = rig.runner.add(make_tab(tmp_path))
@@ -216,7 +192,6 @@ def test_state_of_is_what_restore_reads(tmp_path):
         live.status = WORKING
         live.user_engaged = True
         live.awaiting_trust = True
-        live.drafting = True
         live.size = (30, 90)
         state = state_of(live)
         again = rig.runner.add(make_tab(tmp_path))

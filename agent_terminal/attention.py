@@ -24,9 +24,6 @@ OSC_START = "\x1b]"
 BEL = "\x07"
 ST = "\x1b\\"
 ESC = "\x1b"
-CTRL_C = "\x03"
-# How a terminal opens a bracketed paste.
-PASTE_START = "\x1b[200~"
 # An OSC longer than this is not one of ours: clipboard and image payloads run to
 # megabytes, and holding one here would only delay it.
 MAX_OSC = 4096
@@ -39,8 +36,6 @@ BLOCKED = "blocked"
 IDLE = "idle"
 SHELL = "shell"
 EXITED = "exited"
-# No process: ended while idle, to be resumed when the tab is next shown.
-ASLEEP = "asleep"
 
 STOPPED_ON_USER = frozenset({"blocked", "error", "failed"})
 
@@ -53,18 +48,6 @@ def is_user_input(data: str) -> bool:
     """False for what the terminal says on its own: its replies to an agent's queries
     arrive as input, and all of them open with an escape."""
     return not data.startswith(ESC)
-
-
-def is_drafting(data: str, before: bool) -> bool:
-    """Whether the prompt holds unsent text after this input. Enter sends it and Ctrl+C
-    clears it. Text deleted by hand still counts, as what is left cannot be known."""
-    if data.startswith(PASTE_START):
-        return True
-    if not is_user_input(data):
-        return before
-    if data.endswith(("\r", CTRL_C)):
-        return False
-    return before or any(character.isprintable() for character in data)
 
 
 ACTION_REQUIRED_PREFIX = "[ ! ] Action Required | "

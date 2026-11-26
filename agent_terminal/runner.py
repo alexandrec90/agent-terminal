@@ -45,10 +45,6 @@ class LiveTab:
     # Claude is running plain only to ask, and the tab's real start waits on the answer.
     worktree_after_trust: bool = False
     size: tuple[int, int] = (0, 0)
-    # Unsent text in the prompt, which ending the process would lose.
-    drafting: bool = False
-    # When the user or the agent last did something, on the monotonic clock.
-    used_at: float = field(default_factory=time.monotonic)
 
 
 def state_of(live: LiveTab) -> dict[str, Any]:
@@ -59,7 +55,6 @@ def state_of(live: LiveTab) -> dict[str, Any]:
         "user_engaged": live.user_engaged,
         "awaiting_trust": live.awaiting_trust,
         "worktree_after_trust": live.worktree_after_trust,
-        "drafting": live.drafting,
         "rows": live.size[0],
         "cols": live.size[1],
     }
@@ -72,7 +67,6 @@ def restore_state(live: LiveTab, state: dict[str, Any]) -> None:
     live.user_engaged = bool(state.get("user_engaged", False))
     live.awaiting_trust = bool(state.get("awaiting_trust", False))
     live.worktree_after_trust = bool(state.get("worktree_after_trust", False))
-    live.drafting = bool(state.get("drafting", False))
     live.size = (int(state.get("rows", 0)), int(state.get("cols", 0)))
 
 
@@ -142,16 +136,14 @@ class TabRunner:
         return {live.tab.session_id for live in self.live.values() if live.tab.session_id}
 
     def add(self, tab: Tab) -> LiveTab:
-        """Prepare a tab, so it can be shown before its process is up, or with none: one
-        that is asleep."""
+        """Prepare a tab, so it can be shown before its process is up."""
         holder: list[LiveTab] = []
         session = self._sessions.new(
             tab.id,
             lambda text: self.receive(holder[0], text),
             lambda code: self._to_loop(self._exited, holder[0], code),
         )
-        status = attention.ASLEEP if tab.asleep else attention.STARTING
-        holder.append(LiveTab(tab=tab, session=session, status=status))
+        holder.append(LiveTab(tab=tab, session=session))
         self.live[tab.id] = holder[0]
         return holder[0]
 
@@ -244,8 +236,6 @@ class TabRunner:
         """Send what the page typed. Raises `KeyError` for a tab that has gone."""
         live = self.live[tab_id]
         live.user_engaged = live.user_engaged or attention.is_user_input(data)
-        live.drafting = attention.is_drafting(data, live.drafting)
-        live.used_at = time.monotonic()
         live.session.write(data)
 
     async def close(self, tab_id: str) -> None:
@@ -292,7 +282,6 @@ class TabRunner:
         before = (live.status, tab.attention, tab.parked, tab.title, live.awaiting_trust)
         state = attention.parse_program_state(payload)
         if state is not None:
-            live.used_at = time.monotonic()
             current = Presence(live.status, tab.attention, tab.parked)
             updated = attention.advance(current, state, user_engaged=live.user_engaged)
             live.status = updated.status

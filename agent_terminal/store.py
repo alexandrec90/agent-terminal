@@ -41,8 +41,6 @@ class Tab:
     # When the session last did something the user set going; None until it has, when
     # the page shows `created_at` instead.
     updated_at: float | None = None
-    # Its agent was ended while idle, and is resumed when the tab is next shown.
-    asleep: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

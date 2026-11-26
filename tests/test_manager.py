@@ -813,45 +813,6 @@ async def test_restore_brings_back_every_tab_and_the_active_one(rig):
 
 
 @run
-async def test_a_tab_left_asleep_stays_so_until_the_user_goes_to_it(rig):
-    path = str(rig.settings.projects_root / "repo")
-    write_session(rig, rig.repo, "s2")
-    tabs = [
-        make_saved_tab(path, id="a", session_id="s1"),
-        make_saved_tab(path, id="b", session_id="s2", asleep=True),
-    ]
-    save_snapshot(rig.settings.state_file, Snapshot(tabs=tabs, active_id="a"))
-    await rig.hello()
-    assert [t["status"] for t in rig.tabs()] == ["starting", "asleep"]
-    assert len(rig.processes) == 1
-    await rig.manager.handle({"type": "resize", "rows": 40, "cols": 90})
-
-    await rig.manager.handle({"type": "activate", "id": "b"})
-    assert rig.tabs()[1]["status"] == "starting"
-    for _ in range(200):
-        if len(rig.processes) == 2:
-            break
-        await asyncio.sleep(0.01)
-    assert rig.processes[1].command().startswith("& 'claude' '--resume' 's2'")
-    assert rig.sizes[1] == (40, 90)
-    assert any(m == {"type": "reset", "id": "b"} for m in rig.messages)
-    await rig.manager.shutdown()
-    assert [t.asleep for t in load_snapshot(rig.settings.state_file).tabs] == [False, False]
-
-
-@run
-async def test_the_tab_on_screen_at_launch_is_never_left_asleep(rig):
-    path = str(rig.settings.projects_root / "repo")
-    save_snapshot(
-        rig.settings.state_file,
-        Snapshot(tabs=[make_saved_tab(path, id="a", asleep=True)], active_id="a"),
-    )
-    await rig.hello()
-    assert rig.tabs()[0]["status"] == "starting"
-    assert len(rig.processes) == 1
-
-
-@run
 async def test_restore_resumes_a_session_with_a_transcript(rig):
     project = rig.settings.claude_home / "projects" / "encoded"
     project.mkdir(parents=True)

@@ -940,44 +940,6 @@ def test_closing_the_window_brings_every_tab_back(tmp_path):
     asyncio.run(run())
 
 
-def test_a_sleeping_tab_shows_a_moon_and_resumes_when_clicked(tmp_path):
-    make_projects(tmp_path)
-    project = tmp_path / "projects" / "alpha"
-    transcript = tmp_path / "claude-home" / "projects" / "encoded" / "s.jsonl"
-    transcript.parent.mkdir(parents=True)
-    transcript.write_text("{}\n", encoding="utf-8")
-    saved = {"project": "alpha", "project_path": str(project), "agent": "claude", "created_at": 1.0}
-    tabs = [
-        {**saved, "id": "awake", "session_id": "other"},
-        {**saved, "id": "resting", "session_id": "s", "asleep": True},
-    ]
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "state.json").write_text(
-        json.dumps({"version": 1, "active_id": "awake", "tabs": tabs}), encoding="utf-8"
-    )
-
-    async def run() -> None:
-        app = App(tmp_path)
-        try:
-            window = await app.start()
-            await window.wait_class("awake", has("idle"), "ready")
-            await window.wait_class("resting", has("asleep"), "asleep")
-            mark = '[data-id="resting"] .tab-dot'
-            assert await window.js(icon_in(mark)) == "asleep"
-            meta = "document.querySelector('[data-id=\"resting\"] .tab-meta').textContent"
-            assert "asleep" in await window.js(meta)
-            assert len(launches(app)) == 1
-
-            await window.click('[data-id="resting"]')
-            await window.wait_class("resting", has("idle"), "resumed")
-            assert launches(app)[-1]["argv"] == ["--resume", "s"]
-        finally:
-            await app.dispose()
-            app.kill()
-
-    asyncio.run(run())
-
-
 def test_a_restart_keeps_the_agent_running_mid_turn(tmp_path):
     async def run() -> None:
         make_projects(tmp_path)

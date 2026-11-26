@@ -18,13 +18,22 @@ class Rig:
         self.typed: list[str] = []
         self.land = "create"
         self.on_input = lambda: None
-        runner = SimpleNamespace(live={"t": self.live}, input=self.input)
+        # What the board was told, and the agent's status at each word.
+        self.board_calls: list[tuple[str, str]] = []
+        self.lives = {"t": self.live}
+        runner = SimpleNamespace(live=self.lives, input=self.input)
         board = SimpleNamespace(
-            tab_fields=lambda _tab: {"land": self.land}, pr_of_tab=lambda _id: None
+            tab_fields=lambda _tab: {"land": self.land},
+            pr_of_tab=lambda _id: None,
+            hold_land=lambda _id: self.board_calls.append(("hold", self.live.status)),
+            release_land=self.release_land,
         )
         self.requests = LandRequests(
             cast(PrBoard, board), cast(TabRunner, runner), lambda tab_id: {"t": self.tab}[tab_id]
         )
+
+    async def release_land(self, _tab: Tab) -> None:
+        self.board_calls.append(("release", self.live.status))
 
     def input(self, _tab_id: str, data: str) -> None:
         self.typed.append(data)
@@ -38,7 +47,61 @@ class Rig:
 def rig(monkeypatch):
     monkeypatch.setattr(module, "ENTER_DELAY_SECONDS", 0.01)
     monkeypatch.setattr(module, "SETTLE_SECONDS", 0.01)
+    monkeypatch.setattr(module, "STATUS_SECONDS", 0.01)
+    monkeypatch.setattr(module, "TAKE_UP_SECONDS", 0.5)
     return Rig()
+
+
+def run_agent(rig: Rig, *statuses: str) -> None:
+    """Have the agent go through `statuses`, one a status look apart, once it is entered."""
+
+    async def go() -> None:
+        for status in statuses:
+            await asyncio.sleep(0.03)
+            rig.live.status = status
+
+    tasks: list[asyncio.Task[None]] = []
+
+    def on_input() -> None:
+        if rig.typed[-1] == "\r":
+            tasks.append(asyncio.get_running_loop().create_task(go()))
+
+    rig.on_input = on_input
+
+
+def test_the_button_is_held_until_the_agent_is_back_at_its_prompt(rig):
+    run_agent(rig, "working", "blocked", "working", "idle")
+    asyncio.run(rig.click())
+    assert rig.board_calls == [("hold", "idle"), ("release", "idle")]
+
+
+@pytest.mark.parametrize("status", ["asleep", "exited", "shell"])
+def test_the_button_is_released_when_the_agent_stops_otherwise(rig, status):
+    run_agent(rig, "working", status)
+    asyncio.run(rig.click())
+    assert rig.board_calls[-1] == ("release", status)
+
+
+def test_the_button_is_released_when_the_tab_closes(rig):
+    def close() -> None:
+        if rig.typed[-1] == "\r":
+            rig.lives.clear()
+
+    rig.on_input = close
+    asyncio.run(rig.click())
+    assert [call for call, _ in rig.board_calls] == ["hold", "release"]
+
+
+def test_the_button_is_released_if_the_agent_never_takes_it_up(rig):
+    asyncio.run(rig.click())
+    assert rig.board_calls == [("hold", "idle"), ("release", "idle")]
+
+
+def test_the_button_is_released_when_typing_fails(rig):
+    rig.on_input = lambda: setattr(rig.live, "status", "blocked")
+    with pytest.raises(ValueError, match="blocked"):
+        asyncio.run(rig.click())
+    assert [call for call, _ in rig.board_calls] == ["hold", "release"]
 
 
 def test_the_skill_is_typed_then_entered(rig):

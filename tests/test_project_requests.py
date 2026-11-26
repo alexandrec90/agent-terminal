@@ -51,8 +51,9 @@ class Rig:
             Desktop(recycle=self.recycle),
             self.gh,
             lambda: list(self.open),
-            retirement,
         )
+        if retirement is not None:
+            self.requests._retirement = retirement
 
     def recycle(self, path: Path) -> None:
         if self.recycle_error:

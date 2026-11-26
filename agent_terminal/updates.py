@@ -165,6 +165,16 @@ def read_update_result(path: Path) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
+@dataclass(frozen=True)
+class AppOrigin:
+    """Where the running app came from: the checkout it runs from, if any, and how to
+    read what it was installed from and the commit it started on. Replaced in tests."""
+
+    checkout: Path | None = None
+    source: Callable[[], Path | None] = installed_from
+    head: Callable[[Path], str] = started_commit
+
+
 class AppControl:
     """Answers the page about the app itself: is there an update, and restart it."""
 
@@ -175,15 +185,15 @@ class AppControl:
         loop: asyncio.AbstractEventLoop,
         sessions_status: Callable[[], dict[str, Any]],
         restart: Restart,
-        checkout: Path | None = None,
-        source: Callable[[], Path | None] = installed_from,
-        head: Callable[[Path], str] = started_commit,
+        origin: AppOrigin | None = None,
     ) -> None:
         self._settings = settings
+        origin = origin or AppOrigin()
+        checkout = origin.checkout
         # Read now, as the app starts: the checkout's HEAD moves on without it.
-        self._running = head(checkout) if checkout is not None else ""
+        self._running = origin.head(checkout) if checkout is not None else ""
         # Said once, at start: a copy outside a checkout stays that way until relaunched.
-        self._cannot_update = "" if checkout is not None else cannot_update(source())
+        self._cannot_update = "" if checkout is not None else cannot_update(origin.source())
         self._emit = emit
         self._loop = loop
         self._sessions_status = sessions_status

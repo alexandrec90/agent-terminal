@@ -26,7 +26,7 @@ from agent_terminal.productivity import Productivity
 from agent_terminal.relaunch import launch_relaunch
 from agent_terminal.sessions import LocalSessions
 from agent_terminal.settings import Settings
-from agent_terminal.updates import AppControl
+from agent_terminal.updates import AppControl, AppOrigin
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class Backend:
             self._loop,
             sessions.status,
             self.request_restart,
-            checkout=checkout,
+            AppOrigin(checkout=checkout),
         )
         self._productivity = Productivity(settings, emit, self._loop)
         self._manager = TabManager(

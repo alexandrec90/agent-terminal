@@ -1,10 +1,13 @@
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from agent_terminal import land_requests as module
 from agent_terminal.land_requests import LandRequests
+from agent_terminal.pr_board import PrBoard
+from agent_terminal.runner import TabRunner
 from agent_terminal.store import Tab
 
 
@@ -19,7 +22,9 @@ class Rig:
         board = SimpleNamespace(
             tab_fields=lambda _tab: {"land": self.land}, pr_of_tab=lambda _id: None
         )
-        self.requests = LandRequests(board, runner, lambda tab_id: {"t": self.tab}[tab_id])
+        self.requests = LandRequests(
+            cast(PrBoard, board), cast(TabRunner, runner), lambda tab_id: {"t": self.tab}[tab_id]
+        )
 
     def input(self, _tab_id: str, data: str) -> None:
         self.typed.append(data)

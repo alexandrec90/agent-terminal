@@ -1029,7 +1029,12 @@ legend {
   white-space: pre-wrap;
 }
 
+#project-message.progress {
+  color: var(--muted);
+}
+
 #remote-toggle,
+#retired-toggle,
 #scaffold-toggle {
   display: block;
   margin-top: 8px;
@@ -1039,6 +1044,7 @@ legend {
 }
 
 #remote-toggle:hover,
+#retired-toggle:hover,
 #scaffold-toggle:hover {
   text-decoration: underline;
 }
@@ -1116,14 +1122,28 @@ legend {
   white-space: pre-wrap;
 }
 
-#remote {
+#remote,
+#retired {
   margin-top: 6px;
 }
 
-#remote-status {
+#remote-status,
+#retired-status {
   margin: 0 0 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+#retired-status:empty {
+  display: none;
+}
+
+#retired-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .tab-chip.deploy {

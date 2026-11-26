@@ -1,6 +1,7 @@
 """What the new-group dialog asks of the projects root: which of the user's repositories
-are not here yet, to clone one, and to delete a project. Each answer goes back as a
-message; a refusal is an answer the dialog shows, not an error."""
+are not here yet, to clone one, to delete a project (retiring it through devkit first),
+and to restore one retired. Each answer goes back as a message; a refusal is an answer
+the dialog shows, not an error."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from agent_terminal import repos
 from agent_terminal.desktop import Desktop, Emit
 from agent_terminal.projects import list_projects
 from agent_terminal.prs import Gh, GhError
+from agent_terminal.retire import RESTORE, RETIRE, RetireError, Retirement, plan_message
 from agent_terminal.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class ProjectRequests:
         desktop: Desktop,
         gh: Gh,
         open_folders: Callable[[], list[Path]],
+        retirement: Retirement | None = None,
     ) -> None:
         self._settings = settings
         self._emit = emit
@@ -39,6 +42,9 @@ class ProjectRequests:
         self._desktop = desktop
         self._gh = gh
         self._open_folders = open_folders
+        self._retirement = retirement or Retirement(settings)
+        # One retire or restore at a time: two would race in devkit's registry.
+        self._busy = False
 
     def handlers(self) -> dict[str, Handler]:
         """The message types answered here."""
@@ -47,6 +53,8 @@ class ProjectRequests:
             "clone_repo": self._on_clone,
             "describe_deletion": self._on_describe_deletion,
             "delete_project": self._on_delete,
+            "list_retired": self._on_list_retired,
+            "restore_project": self._on_restore,
         }
 
     @property
@@ -86,27 +94,113 @@ class ProjectRequests:
     def _deletable(self, requested: object) -> Path:
         return repos.deletable_project(self._root, requested, self._open_folders())
 
+    def _retire_plan(self, name: str) -> dict[str, Any]:
+        """What retiring `name` will do, for the confirmation. Raises `RetireError` when
+        the script refuses it, which refuses the delete too."""
+        if not self._retirement.available():
+            return plan_message(None, f"{self._retirement.missing()}: only the folder moves.")
+        if not Retirement.takes(name):
+            return plan_message(None, f"{name} is not a devkit project name: only the folder moves.")
+        return plan_message(self._retirement.plan(name))
+
     async def _on_describe_deletion(self, message: dict[str, Any]) -> None:
         requested = message["path"]
         reply: dict[str, Any] = {"type": "deletion", "requested": requested, "risks": []}
         try:
             folder = self._deletable(requested)
-        except ValueError as exc:
+            run = self._loop.run_in_executor
+            risks = await run(None, repos.deletion_risks, folder)
+            retire = await run(None, self._retire_plan, folder.name)
+        except (ValueError, OSError, RetireError) as exc:
             self._emit({**reply, "error": str(exc)})
             return
-        risks = await self._loop.run_in_executor(None, repos.deletion_risks, folder)
-        self._emit({**reply, "name": folder.name, "risks": risks, "error": ""})
+        self._emit(
+            {**reply, "name": folder.name, "risks": risks, "retire": retire, "error": ""}
+        )
+
+    def _retire_then_recycle(self, folder: Path, force: bool) -> None:
+        """Retire first: it has the gates (unpushed work, a live box), and a refusal there
+        leaves the folder where it is. Then the folder goes to the Recycle Bin."""
+        retired = False
+        if self._retirement.available() and Retirement.takes(folder.name):
+            self._retirement.apply(RETIRE, folder.name, force=force)
+            retired = True
+        try:
+            self._desktop.recycle(folder)
+        except OSError as exc:
+            if retired:
+                raise OSError(
+                    f"{exc} {folder.name} was retired first; Restore puts that back."
+                ) from exc
+            raise
 
     async def _on_delete(self, message: dict[str, Any]) -> None:
         requested = message["path"]
-        reply: dict[str, Any] = {"type": "deleted", "requested": requested, "error": ""}
+        force = message.get("force") is True
+        reply: dict[str, Any] = {
+            "type": "deleted",
+            "requested": requested,
+            "error": "",
+            "can_force": False,
+        }
+        if self._busy:
+            self._emit({**reply, "error": "A retire or restore is already running."})
+            return
+        self._busy = True
         try:
             # Asked again: a tab may have opened there while the user read the warning.
             folder = self._deletable(requested)
-            await self._loop.run_in_executor(None, self._desktop.recycle, folder)
+            reply["name"] = folder.name
+            await self._loop.run_in_executor(None, self._retire_then_recycle, folder, force)
+        except RetireError as exc:
+            self._emit({**reply, "error": str(exc), "can_force": exc.forceable})
+            return
         except (ValueError, OSError) as exc:
             self._emit({**reply, "error": str(exc)})
             return
-        log.info("recycled project %s", folder)
+        finally:
+            self._busy = False
+        log.info("retired and recycled project %s", folder)
         self.send_projects()
         self._emit(reply)
+        if self._retirement.available():
+            # The restore list has a new entry.
+            self._send_retired()
+
+    def _send_retired(self) -> None:
+        if not self._retirement.available():
+            self._emit({"type": "retired", "projects": [], "error": self._retirement.missing()})
+            return
+        self._emit({"type": "retired", "projects": self._retirement.retired(), "error": ""})
+
+    async def _on_list_retired(self, _message: dict[str, Any]) -> None:
+        self._send_retired()
+
+    def _restore(self, name: str) -> Path:
+        if not self._retirement.available():
+            raise ValueError(self._retirement.missing())
+        if name not in {p["name"] for p in self._retirement.retired()}:
+            raise ValueError(f"{name} is not retired on this machine")
+        self._retirement.apply(RESTORE, name)
+        return self._root / name
+
+    async def _on_restore(self, message: dict[str, Any]) -> None:
+        name = message.get("name")
+        reply: dict[str, Any] = {"type": "restored", "name": name, "path": "", "error": ""}
+        if self._busy:
+            self._emit({**reply, "error": "A retire or restore is already running."})
+            return
+        self._busy = True
+        try:
+            if not isinstance(name, str):
+                raise ValueError("no project named")
+            target = await self._loop.run_in_executor(None, self._restore, name)
+        except (ValueError, OSError, RetireError) as exc:
+            self._emit({**reply, "error": str(exc)})
+            return
+        finally:
+            self._busy = False
+        log.info("restored project %s", name)
+        self.send_projects()
+        self._emit({**reply, "path": str(target) if target.is_dir() else ""})
+        self._send_retired()

@@ -19,6 +19,7 @@ from aiohttp import WSMsgType, web
 
 from agent_terminal import close_guard
 from agent_terminal.desktop import Desktop
+from agent_terminal.errors import ErrorLog
 from agent_terminal.host_client import HostSessions
 from agent_terminal.manager import TabManager
 from agent_terminal.productivity import Productivity
@@ -51,6 +52,7 @@ SLOW_MESSAGES = frozenset(
         "clone_repo",
         "describe_deletion",
         "delete_project",
+        "restore_project",
     }
 )
 
@@ -84,6 +86,8 @@ class Backend:
         self._ready = threading.Event()
         self._port = 0
         self._outbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Everything for the page goes through here, so every error it shows is logged.
+        emit = ErrorLog(self._outbox.put_nowait)
         self._hosted = HostSessions(settings, self._loop) if settings.session_host else None
         sessions = self._hosted or LocalSessions()
         self._close_window = close_window
@@ -95,16 +99,16 @@ class Backend:
         self._restarting = False
         self._control = AppControl(
             settings,
-            self._outbox.put_nowait,
+            emit,
             self._loop,
             sessions.status,
             self.request_restart,
             checkout=checkout,
         )
-        self._productivity = Productivity(settings, self._outbox.put_nowait, self._loop)
+        self._productivity = Productivity(settings, emit, self._loop)
         self._manager = TabManager(
             settings,
-            self._outbox.put_nowait,
+            emit,
             self._loop,
             sessions=sessions,
             desktop=desktop or Desktop(),

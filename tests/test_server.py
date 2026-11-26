@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 
 from agent_terminal import server as server_module
+from agent_terminal.errors import ErrorLog
 from agent_terminal.server import HOST, Backend, request_allowed
 from agent_terminal.settings import Settings
 from agent_terminal.updates import UpdateStatus
@@ -56,6 +57,14 @@ def test_a_restart_starts_the_helper_then_closes_the_window(tmp_path):
     assert restarts.closed == 1
     # Without a host there is nothing to keep: the restart ends the processes.
     assert backend._keep_sessions is False
+
+
+def test_everything_bound_for_the_page_passes_the_error_log(tmp_path):
+    """One emit for all three senders: an error none of them logs is still logged."""
+    backend = Backend(Settings(data_dir=tmp_path, session_host=False))
+    emits = [backend._manager._emit, backend._control._emit, backend._productivity._emit]
+    assert all(isinstance(emit, ErrorLog) for emit in emits)
+    assert len({id(emit) for emit in emits}) == 1
 
 
 def test_an_app_without_a_checkout_cannot_restart_itself(tmp_path):

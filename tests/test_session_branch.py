@@ -45,7 +45,9 @@ def test_the_last_branch_off_the_trunk_wins():
         pr_link(853),
         record(r"C:\r\.claude\worktrees\agent-1", "main"),
     ]
-    assert last_branch(lines) == SessionBranch("land/release-1126", r"C:\r\.claude\worktrees\agent-1")
+    assert last_branch(lines) == SessionBranch(
+        "land/release-1126", r"C:\r\.claude\worktrees\agent-1"
+    )
 
 
 def test_a_session_only_on_the_trunk_has_no_branch():
@@ -55,7 +57,7 @@ def test_a_session_only_on_the_trunk_has_no_branch():
 def test_records_without_a_usable_branch_are_passed_over():
     lines = [
         record(r"C:\r", "worktree-a"),
-        "not json, but mentions \"gitBranch\"",
+        'not json, but mentions "gitBranch"',
         json.dumps(["gitBranch"]),
         json.dumps({"gitBranch": "x"}),
         json.dumps({"gitBranch": None, "cwd": r"C:\r"}),

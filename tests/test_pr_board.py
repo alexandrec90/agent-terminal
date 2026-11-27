@@ -565,7 +565,9 @@ async def test_a_reaped_tab_shows_the_pr_its_session_landed_from_elsewhere(rig):
     # The harness reaped the tab's worktree; its session landed from a subagent's.
     worktrees = rig.repository / ".claude" / "worktrees"
     tab = rig.tab(worktrees / "gone")
-    session_was_on(rig, tab, (worktrees / "gone", "worktree-gone"), (worktrees / "agent-1", "land/x"))
+    session_was_on(
+        rig, tab, (worktrees / "gone", "worktree-gone"), (worktrees / "agent-1", "land/x")
+    )
     rig.gh.branches["land/x"] = make_pr(9, head="land/x", state="MERGED")
     await rig.board.scan()
     fields = rig.board.tab_fields(tab)

@@ -86,7 +86,10 @@ def branch_pairs(facts: Iterable[TabFacts]) -> list[tuple[Path | None, str | Non
     """Every `(repository, branch)` the tabs could show a PR for."""
     pairs: list[tuple[Path | None, str | None]] = []
     for found in facts:
-        pairs += [(found.repository, found.branch), (found.session_repository, found.session_branch)]
+        pairs += [
+            (found.repository, found.branch),
+            (found.session_repository, found.session_branch),
+        ]
     return pairs
 
 

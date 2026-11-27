@@ -163,19 +163,32 @@ class TabRunner:
         """Take on a process the last window left running. What it reported while no
         window was reading is read now, so the tab is as it would have been."""
         holder: list[LiveTab] = []
-        # Anything the process says from here on reaches the loop after this returns,
-        # by which time `holder` is filled.
-        session = self._sessions.adopt(
-            survivor,
-            lambda text: self.receive(holder[0], text),
-            lambda code: self._to_loop(self._exited, holder[0], code),
-        )
+        # The source hands over, inside `adopt` itself, what the process said after its
+        # screen was read, and its exit if it died while away. Those come before there is
+        # a tab to give them to, and after `unread` in time, so they wait for it.
+        early: list[Callable[[LiveTab], None]] = []
+
+        def on_output(text: str) -> None:
+            if holder:
+                self.receive(holder[0], text)
+            else:
+                early.append(lambda live: self.receive(live, text))
+
+        def on_exit(code: int | None) -> None:
+            if holder:
+                self._to_loop(self._exited, holder[0], code)
+            else:
+                early.append(lambda live: self._to_loop(self._exited, live, code))
+
+        session = self._sessions.adopt(survivor, on_output, on_exit)
         live = LiveTab(tab=tab, session=session)
         holder.append(live)
         restore_state(live, survivor.state)
         for payload in live.scanner.feed(survivor.unread):
             self._apply(live, payload)
         self.live[tab.id] = live
+        for event in early:
+            event(live)
         return live
 
     def redraw(self, tab_id: str) -> None:

@@ -198,6 +198,55 @@ def test_output_after_adoption_reaches_the_tab(tmp_path):
     run(tmp_path, body)
 
 
+class Replaying(Adopting):
+    """Hands over, inside `adopt`, what the process did after its screen was read: as
+    `HostSessions` does with the events the host sent before anyone listened."""
+
+    def __init__(self, output: str = "", exit_code: int | None = None) -> None:
+        super().__init__()
+        self.output = output
+        self.exit_code = exit_code
+
+    def adopt(self, survivor, on_output, on_exit):
+        session = super().adopt(survivor, on_output, on_exit)
+        if self.output:
+            on_output(self.output)
+        if self.exit_code is not None:
+            on_exit(self.exit_code)
+        return session
+
+
+def test_output_handed_over_during_adoption_reaches_the_tab(tmp_path):
+    # Regression: this raised IndexError in `_restore`, and the window came up empty.
+    async def body(rig: Rig) -> None:
+        rig.runner._sessions = Replaying(output="later\x1b]7501;state=done\x1b\\")
+        survivor = Survivor(
+            tab_id="t",
+            key="k",
+            alive=True,
+            screen="old\x1b]7501;state=working\x1b\\",
+            unread="\x1b]7501;state=working\x1b\\",
+        )
+        live = rig.runner.adopt(make_tab(tmp_path), survivor)
+        assert rig.runner.live["t"] is live
+        await asyncio.sleep(0.01)
+        assert rig.outputs == [("t", "later\x1b]7501;state=done\x1b\\")]
+        # The handed-over output is newer than `unread`, so it has the last word.
+        assert live.status == IDLE
+
+    run(tmp_path, body)
+
+
+def test_an_exit_handed_over_during_adoption_reaches_the_tab(tmp_path):
+    async def body(rig: Rig) -> None:
+        rig.runner._sessions = Replaying(exit_code=4)
+        live = rig.runner.adopt(make_tab(tmp_path), Survivor(tab_id="t", key="k", alive=False))
+        await asyncio.sleep(0.01)
+        assert live.status == EXITED
+
+    run(tmp_path, body)
+
+
 def test_a_change_is_remembered_with_the_process(tmp_path):
     async def body(rig: Rig) -> None:
         source = Adopting()

@@ -5,6 +5,10 @@ read every few seconds. GitHub is asked once a poll, per repository. A tab and a
 tied by branch alone, which holds for a session started outside this app and for one the
 fix pass renamed: the name is read from the tree each time, never remembered.
 
+When the tree's branch heads no PR, the tab shows the PR of the branch its session was
+last on, as its transcript says (`session_branch.py`): a session may have landed from a
+subagent's worktree, or the harness may have reaped its own.
+
 All `gh` and git work happens off the event loop.
 """
 
@@ -13,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +28,7 @@ from agent_terminal.folders import display_name
 from agent_terminal.projects import list_projects
 from agent_terminal.prompts import Prompt, find_prompt
 from agent_terminal.prs import Gh, GhError, GhMissing, PullRequest, is_settled
+from agent_terminal.session_branch import TRUNK_BRANCHES, SessionBranches
 from agent_terminal.settings import Settings
 from agent_terminal.store import Tab
 from agent_terminal.updates import APP_ROOT
@@ -34,17 +39,17 @@ LOCAL_SCAN_SECONDS = 5.0
 # Runs git in every tab's tree, so not as often as the files are read.
 DELIVERY_SECONDS = 15.0
 GH_CONCURRENCY = 4
-# A tab on these is working on the trunk, and a lookup for a PR headed by it finds nothing.
-TRUNK_BRANCHES = frozenset({"main", "master"})
 
 
 @dataclass(frozen=True)
 class TabFacts:
-    """What a tab's folder says right now."""
+    """What a tab's folder says right now, and where its session last worked."""
 
     repository: Path | None = None
     branch: str | None = None
     ship: str = shipping.NOT_SHIPPING
+    session_repository: Path | None = None
+    session_branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,14 +68,26 @@ class BoardLinks:
     changed: Callable[[], None]
 
 
-def read_tab_facts(tab: Tab) -> TabFacts:
-    """Read a tab's folder. Blocking, though only just."""
+def read_tab_facts(tab: Tab, sessions: SessionBranches | None = None) -> TabFacts:
+    """Read a tab's folder, and its session's transcript if given. Blocking, though only
+    just."""
     tree = agents.tab_tree(tab)
+    session_repository, session_branch = sessions.of(tab) if sessions else (None, None)
     return TabFacts(
         repository=gitinfo.main_checkout(tree) or gitinfo.main_checkout(Path(tab.project_path)),
         branch=gitinfo.current_branch(tree),
         ship=shipping.ship_stage(tree),
+        session_repository=session_repository,
+        session_branch=session_branch,
     )
+
+
+def branch_pairs(facts: Iterable[TabFacts]) -> list[tuple[Path | None, str | None]]:
+    """Every `(repository, branch)` the tabs could show a PR for."""
+    pairs: list[tuple[Path | None, str | None]] = []
+    for found in facts:
+        pairs += [(found.repository, found.branch), (found.session_repository, found.session_branch)]
+    return pairs
 
 
 class PrBoard:
@@ -91,6 +108,7 @@ class PrBoard:
         self._by_branch: dict[tuple[Path, str], PullRequest] = {}
         self._prompts: dict[tuple[Path, int], OpenPrompt] = {}
         self._facts: dict[str, TabFacts] = {}
+        self._sessions = SessionBranches(settings.claude_home)
         self._delivery = DeliveryReader(settings.devkit_root, APP_ROOT)
         self._progress: dict[str, Progress] = {}
         self._delivery_started = self._delivery_stored = 0
@@ -105,8 +123,8 @@ class PrBoard:
     def tab_fields(self, tab: Tab) -> dict[str, Any]:
         """A tab's place in the shipping process, for the state message."""
         facts = self._facts.get(tab.id, TabFacts())
-        found = self.pr_for(facts.repository, facts.branch)
-        pr = {**found.to_dict(), "repo": str(facts.repository)} if found else None
+        repository, found = self.shown_pr(facts)
+        pr = {**found.to_dict(), "repo": str(repository)} if found else None
         progress = asdict(self._progress.get(tab.id, Progress()))
         if tab.id in self._landing:
             # Its PR is on its way: until it is known, the work reads as never shipped.
@@ -114,9 +132,19 @@ class PrBoard:
         return {"ship": facts.ship, "branch": facts.branch, "pr": pr, **progress}
 
     def pr_of_tab(self, tab_id: str) -> PullRequest | None:
-        """The PR a tab's branch heads, as last known."""
+        """The PR a tab's own branch heads, as last known. What landing its tree's work
+        builds on, so never its session's PR from another branch."""
         facts = self._facts.get(tab_id, TabFacts())
         return self.pr_for(facts.repository, facts.branch)
+
+    def shown_pr(self, facts: TabFacts) -> tuple[Path | None, PullRequest | None]:
+        """The PR a tab shows, and its repository: its tree's branch's, else the one of
+        the branch its session was last on."""
+        found = self.pr_for(facts.repository, facts.branch)
+        if found is not None:
+            return facts.repository, found
+        found = self.pr_for(facts.session_repository, facts.session_branch)
+        return (facts.session_repository, found) if found else (None, None)
 
     def pr_for(self, repository: Path | None, branch: str | None) -> PullRequest | None:
         """The PR `branch` heads, as last known: open first, else merged or closed."""
@@ -129,7 +157,7 @@ class PrBoard:
 
     def plain_prs(self) -> list[dict[str, Any]]:
         """Open PRs no tab holds. A session that has its PR shows it on the tab instead."""
-        held = {(f.repository, f.branch) for f in self._facts.values()}
+        held = set(branch_pairs(self._facts.values()))
         return [
             {
                 **pr.to_dict(),
@@ -183,15 +211,19 @@ class PrBoard:
         """Read every tab's folder. A branch not seen before is looked up at once, so a
         session's PR does not take a poll to appear on it."""
         tabs = self._links.tabs()
-        read = await self._loop.run_in_executor(None, lambda: [read_tab_facts(t) for t in tabs])
+        sessions = self._sessions
+
+        def read_all() -> list[TabFacts]:
+            sessions.forget_others({t.session_id for t in tabs if t.session_id})
+            return [read_tab_facts(t, sessions) for t in tabs]
+
+        read = await self._loop.run_in_executor(None, read_all)
         facts = {tab.id: found for tab, found in zip(tabs, read, strict=True)}
         if facts == self._facts:
             return
         known = set(self._facts.values())
         self._facts = facts
-        await self.look_up_branches(
-            (found.repository, found.branch) for found in facts.values() if found not in known
-        )
+        await self.look_up_branches(branch_pairs(f for f in facts.values() if f not in known))
         self._links.changed()
 
     async def check_delivery(self) -> None:
@@ -200,13 +232,29 @@ class PrBoard:
         for tab in self._links.tabs():
             facts = self._facts.get(tab.id, TabFacts())
             pr = self.pr_of_tab(tab.id)
-            wanted.append((tab.id, agents.tab_tree(tab), tab.agent, facts, pr))
-        read = self._delivery.read
+            shown = self.shown_pr(facts) if pr is None else (None, None)
+            wanted.append((tab.id, agents.tab_tree(tab), tab.agent, facts, pr, shown))
+        delivery = self._delivery
+
+        def read_one(
+            tree: Path,
+            agent: str,
+            facts: TabFacts,
+            pr: PullRequest | None,
+            shown: tuple[Path | None, PullRequest | None],
+        ) -> Progress:
+            progress = delivery.read(tree, agent, facts.repository, facts.ship, pr)
+            repository, session_pr = shown
+            if repository is None or session_pr is None:
+                return progress
+            # The session's PR is from another branch: its gates show, but what landing
+            # the tree's own work means is the tree's to say.
+            return replace(progress, gates=delivery.gates(repository, session_pr))
 
         def read_all() -> dict[str, Progress]:
             return {
-                tab_id: read(tree, agent, facts.repository, facts.ship, pr)
-                for tab_id, tree, agent, facts, pr in wanted
+                tab_id: read_one(tree, agent, facts, pr, shown)
+                for tab_id, tree, agent, facts, pr, shown in wanted
             }
 
         self._delivery_started += 1
@@ -230,9 +278,11 @@ class PrBoard:
         """Catch up on a tab whose agent has finished landing, then offer what is left."""
         try:
             await self.scan()
-            repository = self._facts.get(tab.id, TabFacts()).repository
-            if repository is not None:
-                await self.refresh(repository)
+            facts = self._facts.get(tab.id, TabFacts())
+            # The land may have run in another repository's checkout than the tab's.
+            for repository in dict.fromkeys((facts.repository, facts.session_repository)):
+                if repository is not None:
+                    await self.refresh(repository)
             await self.check_delivery()
         finally:
             self._landing.discard(tab.id)
@@ -250,7 +300,7 @@ class PrBoard:
                 await self._refresh_repository(target)
 
         await asyncio.gather(*(one(target) for target in targets))
-        await self.look_up_branches((f.repository, f.branch) for f in self._facts.values())
+        await self.look_up_branches(branch_pairs(self._facts.values()))
         self._links.changed()
 
     async def _all_repositories(self) -> list[Path]:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -544,6 +545,68 @@ async def test_start_watches_until_stopped(rig):
             break
     assert rig.board.plain_prs()
     rig.board.stop()
+
+
+def session_was_on(rig: Rig, tab: Tab, *moments: tuple[Path, str]) -> None:
+    """Give the tab a Claude session whose transcript was in these folders, on these
+    branches, in order."""
+    tab.session_id = "session-1"
+    transcripts = claude_transcript_dir(rig.settings.claude_home, Path(str(tab.cwd)))
+    transcripts.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps({"type": "assistant", "cwd": str(cwd), "gitBranch": branch})
+        for cwd, branch in moments
+    ]
+    (transcripts / "session-1.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@run
+async def test_a_reaped_tab_shows_the_pr_its_session_landed_from_elsewhere(rig):
+    # The harness reaped the tab's worktree; its session landed from a subagent's.
+    worktrees = rig.repository / ".claude" / "worktrees"
+    tab = rig.tab(worktrees / "gone")
+    session_was_on(rig, tab, (worktrees / "gone", "worktree-gone"), (worktrees / "agent-1", "land/x"))
+    rig.gh.branches["land/x"] = make_pr(9, head="land/x", state="MERGED")
+    await rig.board.scan()
+    fields = rig.board.tab_fields(tab)
+    assert fields["pr"]["number"] == 9
+    assert fields["pr"]["repo"] == str(rig.key())
+    # Landing new work builds on the tree's own branch, which heads nothing.
+    assert rig.board.pr_of_tab(tab.id) is None
+
+
+@run
+async def test_the_trees_own_pr_wins_over_the_sessions(rig):
+    tree = rig.worktree("a")
+    tab = rig.tab(tree)
+    session_was_on(rig, tab, (rig.repository / ".claude" / "worktrees" / "agent-1", "land/x"))
+    rig.gh.open[rig.key()] = [make_pr(7), make_pr(9, head="land/x")]
+    await rig.board.refresh()
+    await rig.board.scan()
+    assert rig.board.tab_fields(tab)["pr"]["number"] == 7
+
+
+@run
+async def test_a_sessions_pr_is_held_by_its_tab_and_shows_its_gates(rig):
+    tab = rig.tab(rig.worktree("a"))
+    session_was_on(rig, tab, (rig.repository / ".claude" / "worktrees" / "agent-1", "land/x"))
+    rig.gh.open[rig.key()] = [replace(make_pr(9, head="land/x"), ci="passing")]
+    await rig.board.refresh()
+    await rig.board.scan()
+    await rig.board.check_delivery()
+    fields = rig.board.tab_fields(tab)
+    assert fields["pr"]["number"] == 9
+    assert ("ci", "passing") in [(g["name"], g["state"]) for g in fields["gates"]]
+    assert rig.board.plain_prs() == []
+
+
+@run
+async def test_a_session_only_on_the_trunk_shows_nothing(rig):
+    tab = rig.tab(rig.worktree("a"))
+    session_was_on(rig, tab, (rig.repository, "main"))
+    await rig.board.scan()
+    assert rig.board.tab_fields(tab)["pr"] is None
+    assert rig.gh.branch_calls == ["worktree-a"]
 
 
 def test_pull_request_stays_comparable():

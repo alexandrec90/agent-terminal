@@ -15,6 +15,7 @@ from agent_terminal.errors import page_error_text
 from agent_terminal.groups import Groups, open_folders, successor
 from agent_terminal.history import HistoryLinks, SessionHistory
 from agent_terminal.land_requests import LandRequests
+from agent_terminal.limits import LimitLinks, LimitWatcher
 from agent_terminal.ordering import Ordering
 from agent_terminal.pr_board import BoardLinks, PrBoard
 from agent_terminal.pr_requests import PrRequests
@@ -82,6 +83,9 @@ class TabManager:
             lambda: self._active_id, lambda: self._terminal.size, events.changed, events.reset
         )
         self.sleeper = Sleeper(settings, loop, self.runner, wake)
+        self.limits = LimitWatcher(
+            settings, loop, self.runner, LimitLinks(events.changed, self.sleeper.wake)
+        )
         gh = Gh(settings)
         links = BoardLinks(lambda: list(self._tabs), self._emit_state)
         self.board = PrBoard(settings, loop, links, gh)
@@ -145,6 +149,7 @@ class TabManager:
         self.board.start()
         await self._restore()
         self.sleeper.start()
+        self.limits.start()
 
     async def _on_create(self, message: dict[str, Any]) -> None:
         agent = message["agent"]
@@ -236,6 +241,8 @@ class TabManager:
                 **tab.to_dict(),
                 "status": live[tab.id].status,
                 "awaiting_trust": live[tab.id].awaiting_trust,
+                "limited_until": live[tab.id].limited_until,
+                "resumes_after_limit": self._settings.resume_after_limit,
                 **self.board.tab_fields(tab),
             }
             for tab in self._tabs
@@ -310,6 +317,7 @@ class TabManager:
         host, with what the next window needs to carry on with it."""
         self.board.stop()
         self.sleeper.stop()
+        self.limits.stop()
         await self.runner.find_unfound_sessions()
         self._saver.save_now()
         if keep_processes:

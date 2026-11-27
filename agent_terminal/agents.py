@@ -113,15 +113,17 @@ def tab_tree(tab: Tab) -> Path:
     return Path(tab.cwd) if tab.cwd else Path(tab.project_path)
 
 
-def claude_launch(tab: Tab, settings: Settings) -> Launch:
+def claude_launch(tab: Tab, settings: Settings, prompt: str | None = None) -> Launch:
     """Resume the tab's session if it has one, otherwise start it. Claude names a new
-    worktree itself, as it does from any terminal."""
+    worktree itself, as it does from any terminal. `prompt`, if given, is the resumed
+    session's next message; a session not yet begun has nothing to go on with."""
     session_id = tab.session_id or str(uuid.uuid4())
     if claude_session_exists(settings.claude_home, session_id):
         # `-w` would be taken as a request for a checkout, so resume from inside it.
         tree = tab.cwd or claude_session_tree(settings.claude_home, session_id)
         cwd = tree if tree and Path(tree).is_dir() else tab.project_path
-        return Launch(cwd, [settings.claude_command, "--resume", session_id], resumes=True)
+        argv = [settings.claude_command, "--resume", session_id]
+        return Launch(cwd, [*argv, prompt] if prompt else argv, resumes=True)
     args = [settings.claude_command, "--session-id", session_id]
     if tab.cwd and Path(tab.cwd).is_dir():
         # Its tree exists already: a PR's, or one a tab closed before its first message.
@@ -148,9 +150,11 @@ def codex_launch(tab: Tab, settings: Settings) -> Launch:
     return Launch(tab.project_path, args, makes_worktree=tab.worktree)
 
 
-def launch_for(tab: Tab, settings: Settings) -> Launch:
-    """The start for this tab's agent."""
-    return claude_launch(tab, settings) if tab.agent == CLAUDE else codex_launch(tab, settings)
+def launch_for(tab: Tab, settings: Settings, prompt: str | None = None) -> Launch:
+    """The start for this tab's agent. Only Claude takes a `prompt`."""
+    if tab.agent == CLAUDE:
+        return claude_launch(tab, settings, prompt)
+    return codex_launch(tab, settings)
 
 
 def powershell_quote(argument: str) -> str:

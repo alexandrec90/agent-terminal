@@ -1304,6 +1304,26 @@ async def test_untrusted_worktree_runs_claude_plain_at_the_repository(rig):
 
 
 @run
+async def test_a_tab_says_when_the_usage_limit_holding_it_resets(rig):
+    await rig.hello()
+    tab = await rig.create()
+    assert tab["limited_until"] is None
+    assert tab["resumes_after_limit"] is True
+    refused = {
+        "type": "assistant",
+        "isSidechain": False,
+        "apiError": "usage_limit_reached",
+        "apiErrorParams": {"rate_limit_info": {"resetsAt": 1795739400}},
+    }
+    transcript = rig.settings.claude_home / "projects" / "C--repo" / f"{tab['session_id']}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps(refused, separators=(",", ":")) + "\n", encoding="utf-8")
+    await rig.output(tab["id"], status("done"))
+    await rig.manager.limits.sweep()
+    assert rig.tabs()[0]["limited_until"] == 1795739400
+
+
+@run
 async def test_a_repository_under_a_trusted_folder_is_asked_about_first(rig):
     """The folder above is trusted but the repository is not: `claude -w` refuses that."""
     rig.make_repository()

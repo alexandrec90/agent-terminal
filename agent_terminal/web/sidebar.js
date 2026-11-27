@@ -206,6 +206,7 @@ function needsInput(tab) {
 
 function tabClasses(tab, activeId) {
   const classes = ["tab", tab.status];
+  if (tab.limited_until) classes.push("limited");
   if (tab.id === activeId) classes.push("active");
   if (tab.parked) classes.push("parked");
   else if (needsInput(tab)) classes.push("attention", "input");
@@ -219,9 +220,26 @@ function statusWord(tab) {
   return ATTENTION_TEXT[tab.attention] ?? STATUS_TEXT[tab.status];
 }
 
+// When a usage limit resets, in the user's own clock: "resets 7:30 PM", with the day
+// when it is not today's. Both times are in epoch seconds.
+export function resetText(until, now) {
+  const at = new Date(until * 1000);
+  const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = at.toDateString() === new Date(now * 1000).toDateString();
+  const when = today ? time : `${at.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return until > now ? `limit · resets ${when}` : `limit reset ${when}`;
+}
+
+function limitHint(tab) {
+  const at = new Date(tab.limited_until * 1000).toLocaleString();
+  const then = tab.resumes_after_limit ? `; it will be sent "continue" then` : "";
+  return `Stopped at its usage limit until ${at}${then}`;
+}
+
 // The states with an icon of their own; the rest keep the plain dot.
 function stateIcon(tab) {
   // First: the row's color still says whether it is parked, finished or waiting.
+  if (tab.limited_until) return "pending";
   if (tab.status === "asleep") return "asleep";
   if (tab.parked) return "parked";
   if (needsInput(tab) || tab.status === "blocked") return "input";
@@ -240,7 +258,8 @@ function stateMark(name) {
 function tabMeta(tab) {
   const parts = [tab.agent];
   if (tab.worktree) parts.push("worktree");
-  const word = statusWord(tab);
+  const now = Date.now() / 1000;
+  const word = tab.limited_until ? resetText(tab.limited_until, now) : statusWord(tab);
   parts.push(word);
   if (tab.status === "asleep" && word !== "asleep") parts.push("asleep");
   return parts.join(" · ");
@@ -313,6 +332,7 @@ function renderTab(tab, groupTabs, activeId, actions) {
   row.dataset.id = tab.id;
   row.title = "Right-click to mark for later; drag to reorder";
   if (tab.status === "asleep") row.title = `Asleep to save memory: click to resume\n${row.title}`;
+  if (tab.limited_until) row.title = `${limitHint(tab)}\n${row.title}`;
   draggableTab(row, tab, groupTabs, actions);
 
   const main = span("tab-main", "");

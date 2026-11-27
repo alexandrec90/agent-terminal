@@ -36,6 +36,39 @@ GIT_IDENTITY = {
 }
 
 
+# Every part the user acts on, in the top-most layer: an open modal dialog, else the page.
+# Each is scrolled into view the way the user would scroll to it, and must then lie inside
+# the window and be what a click at its centre lands on: not clipped, not under a sticky
+# footer, not past an edge no scroll reaches. Returns one line per part that fails.
+UNREACHABLE = """(() => {
+  const dialogs = [...document.querySelectorAll('dialog')].filter((d) => d.open);
+  const layer = dialogs.at(-1) ?? document.body;
+  const faults = [];
+  const name = (el) => el.id ? '#' + el.id
+    : `${el.tagName.toLowerCase()} "${(el.textContent || el.placeholder || '').trim().slice(0, 30)}"`;
+  const outside = (r) => r.top < 0 || r.left < 0 || r.bottom > innerHeight + 0.5
+    || r.right > innerWidth + 0.5;
+  if (layer !== document.body && outside(layer.getBoundingClientRect())) {
+    faults.push(`${name(layer)} runs past the window`);
+  }
+  const parts = layer.querySelectorAll(
+    'button, input, select, textarea, summary, a[href], label.choice, [role="option"]');
+  for (const el of parts) {
+    if (!el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+    if (layer === document.body && el.closest('dialog')) continue;
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    if (outside(r)) { faults.push(`${name(el)} cannot be scrolled into the window`); continue; }
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (!hit || !(el.contains(hit) || hit.contains(el) || hit.closest('label')?.contains(el))) {
+      faults.push(`${name(el)} is covered by ${hit ? name(hit) : 'nothing'}`);
+    }
+  }
+  return faults;
+})()"""
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -129,6 +162,21 @@ class Window:
                 buttons=buttons,
                 clickCount=0 if kind == "mouseMoved" else 1,
             )
+
+    async def set_viewport(self, width: int, height: int) -> None:
+        """Size the page as a window of that size would, resize event included."""
+        await self._call(
+            "Emulation.setDeviceMetricsOverride",
+            width=width,
+            height=height,
+            deviceScaleFactor=0,
+            mobile=False,
+        )
+        await self.wait(f"innerWidth === {width} && innerHeight === {height}", "the resize")
+
+    async def unreachable(self) -> list[str]:
+        """Each part of the top-most layer the user could not scroll to and click."""
+        return await self.js(UNREACHABLE)
 
     async def screenshot(self, path: Path) -> None:
         shot = await self._call("Page.captureScreenshot", format="png")

@@ -720,6 +720,82 @@ def test_a_session_can_be_scoped_to_any_folder(tmp_path):
     scenario(tmp_path, body)
 
 
+# ---- Layout: nothing runs off the window, and nothing jumps ----
+#
+# Each dialog is driven to its tallest state (every section open, long lists and logs),
+# at window sizes down to a small laptop's half-screen, and `Window.unreachable` checks
+# that every control can still be scrolled to and clicked. A dialog's top and width must
+# also hold while it grows: it extends downward and scrolls, never jumps or resizes sideways.
+
+SIZES = [(1280, 800), (900, 560), (720, 420)]
+NEW_TAB_BOX = "(({top, width}) => ({top, width}))(document.getElementById('new-tab').getBoundingClientRect())"
+LONG_LOG = (
+    "(() => { const o = document.getElementById('scaffold-output');"
+    " o.hidden = false; o.textContent = 'create mode 100644 scripts/x.py\\n'.repeat(200); })()"
+)
+
+
+async def grow_the_new_tab_dialog(window: Window) -> None:
+    """Open every section of the new-session dialog, the scaffold's long log last: the
+    state that ran the dialog off the bottom of the screen."""
+    for toggle in ("#remote-toggle", "#retired-toggle", "#scaffold-toggle"):
+        await window.click(toggle)
+    await window.js(LONG_LOG)
+
+
+@pytest.mark.parametrize(("width", "height"), SIZES)
+def test_every_dialog_at_its_tallest_fits_the_window(tmp_path, width, height):
+    async def body(app: App, window: Window) -> None:
+        for n in range(30):
+            (app.projects / f"project-{n:02}").mkdir()
+        await window.set_viewport(width, height)
+        assert await window.unreachable() == []
+
+        await window.click("#new-group")
+        await window.wait("document.querySelectorAll('.project').length >= 30", "the list")
+        opened = await window.js(NEW_TAB_BOX)
+        assert await window.unreachable() == []
+        for toggle in ("#remote-toggle", "#retired-toggle", "#scaffold-toggle"):
+            await window.click(toggle)
+            assert await window.unreachable() == [], f"after {toggle}"
+            assert await window.js(NEW_TAB_BOX) == opened, f"{toggle} moved the dialog"
+        await window.js(LONG_LOG)
+        assert await window.unreachable() == [], "with the scaffold's log open"
+        assert await window.js(NEW_TAB_BOX) == opened, "the log moved the dialog"
+        await window.js("document.getElementById('new-tab').close()")
+
+        await window.js(
+            "(() => { const t = document.getElementById('confirm-text');"
+            " t.replaceChildren(...Array.from({length: 60}, (_, i) => {"
+            "  const p = document.createElement('p'); p.textContent = `line ${i}`; return p; }));"
+            " document.getElementById('confirm').showModal(); })()"
+        )
+        assert await window.unreachable() == [], "the confirmation"
+        await window.click("#confirm-cancel")
+
+        await window.js("document.getElementById('productivity').showModal()")
+        await window.js("document.querySelector('#productivity details').open = true")
+        assert await window.unreachable() == [], "the productivity graph"
+        await window.click("#productivity-close")
+
+    scenario(tmp_path, body)
+
+
+def test_an_open_dialog_follows_the_window_as_it_shrinks(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        await window.set_viewport(*SIZES[0])
+        await window.click("#new-group")
+        await grow_the_new_tab_dialog(window)
+        for size in SIZES[1:]:
+            await window.set_viewport(*size)
+            assert await window.unreachable() == [], f"at {size}"
+        # And back: growing the window must not leave it clipped to the small size.
+        await window.set_viewport(*SIZES[0])
+        assert await window.unreachable() == [], "grown again"
+
+    scenario(tmp_path, body)
+
+
 def test_the_dialog_holds_its_size_and_shows_the_whole_selection(tmp_path):
     rect = "document.getElementById({}).getBoundingClientRect()"
 

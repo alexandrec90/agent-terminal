@@ -956,9 +956,14 @@ button.tab-chip:not(:disabled):hover {
 /* ---- New session dialog ---- */
 
 /* Pinned from the top rather than centered: when a dialog does grow (a third note line),
-   it grows downward instead of shifting everything above it. */
+   it grows downward instead of shifting everything above it. The height cap is what is
+   left below that margin: the browser's own cap ignores it, so a tall dialog (the
+   scaffold's log open) ran off the bottom of the window with Start out of reach. */
 dialog {
   width: min(480px, calc(100vw - 32px));
+  max-height: calc(88vh - 16px);
+  overflow-y: auto;
+  scroll-padding-bottom: 64px; /* the sticky .actions below, so it never hides a field */
   margin: 12vh auto auto;
   padding: 18px;
   border: 1px solid var(--line);
@@ -1409,6 +1414,16 @@ legend {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* Held at the foot of a dialog that scrolls, so Start never scrolls out of reach. The
+   negative margins reach the dialog's 18px padding, so content scrolls under, not past. */
+dialog .actions {
+  position: sticky;
+  bottom: -18px;
+  margin: 4px -18px -18px;
+  padding: 12px 18px 18px;
+  background: var(--panel);
 }
 
 .actions button {

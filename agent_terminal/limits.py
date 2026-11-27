@@ -210,9 +210,7 @@ class LimitWatcher:
         if tab.agent != agents.CLAUDE or not tab.session_id or live.status not in WATCHED:
             return None
         home = self._settings.claude_home
-        return await self._loop.run_in_executor(
-            None, session_limited_until, home, tab.session_id
-        )
+        return await self._loop.run_in_executor(None, session_limited_until, home, tab.session_id)
 
     def _resume(self, live: LiveTab) -> None:
         """Once per limit: a resume refused again is a new limit, with a new time."""

@@ -130,19 +130,28 @@ class Sleeper:
     def wake_active(self) -> None:
         """Resume the tab on screen, if it is asleep. Returns at once."""
         live = self._runner.live.get(self._links.active_id() or "")
-        if live is None or not live.tab.asleep:
+        if live is not None:
+            self.wake(live)
+
+    def wake(self, live: LiveTab, prompt: str | None = None) -> None:
+        """Resume an asleep tab, on screen or not, with `prompt` as its session's next
+        message if one is given. Returns at once; a tab awake is left alone."""
+        if not live.tab.asleep:
             return
         live.tab.asleep = False
         live.status = attention.STARTING
-        task = self._loop.create_task(self._wake(live, self._ending.get(live.tab.id)))
+        ending = self._ending.get(live.tab.id)
+        task = self._loop.create_task(self._wake(live, ending, prompt))
         self._waking.add(task)
         task.add_done_callback(self._waking.discard)
 
-    async def _wake(self, live: LiveTab, ending: Awaitable[None] | None) -> None:
+    async def _wake(
+        self, live: LiveTab, ending: Awaitable[None] | None, prompt: str | None = None
+    ) -> None:
         if ending is not None:
             # Two processes in one session would both write its transcript.
             await asyncio.wait([asyncio.ensure_future(ending)])
         if self._runner.live.get(live.tab.id) is not live:
             return  # closed meanwhile
         self._links.reset(live.tab.id)
-        await self._runner.start(live.tab, self._links.size())
+        await self._runner.start(live.tab, self._links.size(), prompt)

@@ -49,6 +49,10 @@ class LiveTab:
     drafting: bool = False
     # When the user or the agent last did something, on the monotonic clock.
     used_at: float = field(default_factory=time.monotonic)
+    # When the usage limit holding the session resets, in epoch seconds (`limits.py`).
+    limited_until: float | None = None
+    # The limit the tab was last sent back to work after, so it is sent once.
+    resumed_for: float | None = None
 
 
 def state_of(live: LiveTab) -> dict[str, Any]:
@@ -189,20 +193,21 @@ class TabRunner:
         for live in self.live.values():
             live.session.remember(state_of(live))
 
-    async def start(self, tab: Tab, size: tuple[int, int]) -> None:
-        """Start the tab's process. A failure is shown in the tab rather than raised."""
+    async def start(self, tab: Tab, size: tuple[int, int], prompt: str | None = None) -> None:
+        """Start the tab's process. A failure is shown in the tab rather than raised.
+        `prompt` is sent to a resumed session as its next message."""
         live = self.live.get(tab.id)
         if live is None:
             return
         live.size = size
-        launch = await self._loop.run_in_executor(None, self._first_launch, live)
+        launch = await self._loop.run_in_executor(None, self._first_launch, live, prompt)
         await self._run(live, launch)
 
-    def _first_launch(self, live: LiveTab) -> agents.Launch:
+    def _first_launch(self, live: LiveTab, prompt: str | None = None) -> agents.Launch:
         """The tab's start, or the step before it. `claude -w` in a folder not yet trusted
         exits instead of asking, so Claude runs plain to ask and `_reopen` follows."""
         tab = live.tab
-        launch = agents.launch_for(tab, self._settings)
+        launch = agents.launch_for(tab, self._settings, prompt)
         if launch.resumes or trust.is_trusted(self._settings, tab.agent, Path(launch.cwd)):
             return launch
         live.awaiting_trust = True

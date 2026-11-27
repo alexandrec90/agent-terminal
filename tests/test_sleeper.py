@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import threading
 import time
 from pathlib import Path
@@ -22,8 +23,10 @@ class FakeSession:
         self.log = log
         self.hold = threading.Event()
         self.hold.set()
+        self.argv: list[str] | None = None
 
-    def start(self, *_: Any) -> None:
+    def start(self, argv: list[str] | None = None, *_: Any) -> None:
+        self.argv = argv
         self.log.append("start")
 
     def close(self) -> None:
@@ -193,6 +196,38 @@ def test_going_to_a_sleeping_tab_resumes_it_once(tmp_path):
         assert rig.log == ["close", "start"]
         assert rig.resets == ["t"]
         assert rig.runner.live["t"].size == (30, 100)
+
+    run(tmp_path, body)
+
+
+def test_a_tab_off_screen_can_be_woken_with_a_message_for_its_session(tmp_path):
+    async def body(rig: Rig) -> None:
+        transcript = tmp_path / "projects" / "C--p" / "s-t.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("{}\n", encoding="utf-8")
+        tab = rig.add().tab
+        await rig.sleeper.sweep()
+        live = rig.runner.live["t"]
+        rig.sleeper.wake(live, "continue")
+        await settle(rig)
+        assert not tab.asleep
+        assert rig.log == ["close", "start"]
+        session = live.session
+        assert isinstance(session, FakeSession)
+        argv = session.argv
+        assert isinstance(argv, list)
+        command = base64.b64decode(argv[-1]).decode("utf-16-le")
+        assert "'--resume' 's-t' 'continue'" in command
+
+    run(tmp_path, body)
+
+
+def test_waking_a_tab_awake_is_nothing(tmp_path):
+    async def body(rig: Rig) -> None:
+        live = rig.add()
+        rig.sleeper.wake(live, "continue")
+        assert not rig.sleeper._waking
+        assert rig.log == []
 
     run(tmp_path, body)
 

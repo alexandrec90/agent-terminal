@@ -462,6 +462,22 @@ def test_a_tab_says_how_long_ago_it_was_updated(tmp_path):
     scenario(tmp_path, body)
 
 
+def test_a_usage_limit_says_when_it_resets_in_the_users_own_clock(tmp_path):
+    async def body(_app: App, window: Window) -> None:
+        soon, later, past = await window.js(
+            "import('./sidebar.js').then(m => {"
+            " const now = new Date(2026, 0, 5, 12).getTime() / 1000;"
+            " return [now + 3600, now + 3 * 86400, now - 60].map(t => m.resetText(t, now)); })"
+        )
+        assert soon.startswith("limit \N{MIDDLE DOT} resets ")
+        assert later.startswith("limit \N{MIDDLE DOT} resets ")
+        # Another day's reset names the day; today's is the time alone.
+        assert len(later.split()) == len(soon.split()) + 1
+        assert past.startswith("limit reset ")
+
+    scenario(tmp_path, body)
+
+
 def test_closing_a_group_asks_then_closes_every_session_in_it(tmp_path):
     async def body(_app: App, window: Window) -> None:
         kept = await open_tab(window, "beta")

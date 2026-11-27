@@ -211,6 +211,16 @@ class TestClaudeLaunch:
         launch = agents.claude_launch(tab, settings)
         assert launch.cwd == tab.project_path
 
+    def test_a_resumed_session_can_be_given_its_next_message(self, tmp_path, settings):
+        write_claude_session(settings, "abc")
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc")
+        launch = agents.claude_launch(tab, settings, "continue")
+        assert launch.argv == ["claude", "--resume", "abc", "continue"]
+
+    def test_a_session_not_yet_begun_takes_no_message(self, tmp_path, settings):
+        tab = make_tab(tmp_path, CLAUDE, session_id="abc")
+        assert "continue" not in agents.claude_launch(tab, settings, "continue").argv
+
     def test_a_tab_closed_before_its_first_message_starts_again(self, tmp_path, settings):
         # Claude refuses `--resume` for an id with no transcript.
         tab = make_tab(tmp_path, CLAUDE, session_id="abc")
@@ -245,6 +255,14 @@ class TestCodexLaunch:
 def test_launch_for_picks_by_agent(tmp_path, settings):
     assert agents.launch_for(make_tab(tmp_path, CODEX), settings).argv[0] == "codex"
     assert agents.launch_for(make_tab(tmp_path, CLAUDE), settings).argv[0] == "claude"
+
+
+def test_launch_for_hands_claude_the_prompt_and_codex_none(tmp_path, settings):
+    write_claude_session(settings, "abc")
+    claude = make_tab(tmp_path, CLAUDE, session_id="abc")
+    assert agents.launch_for(claude, settings, "continue").argv[-1] == "continue"
+    codex = make_tab(tmp_path, CODEX, session_id="abc")
+    assert agents.launch_for(codex, settings, "continue").argv == ["codex", "resume", "abc"]
 
 
 class TestShell:

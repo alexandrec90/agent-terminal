@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # How long a Claude tab sits idle and out of view before its process is ended, to be
     # resumed when the tab is next shown. 0 never does.
     sleep_after_seconds: float = 900.0
+    # Type "continue" into a Claude tab stopped by its usage limit once the limit resets.
+    # Off, the tab still shows when it resets.
+    resume_after_limit: bool = True
     # The branch the app's own checkout updates from, on `origin`.
     update_branch: str = "main"
     # How often to ask `origin` whether there is an update. A fetch each time.

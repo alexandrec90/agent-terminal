@@ -728,7 +728,9 @@ def test_a_session_can_be_scoped_to_any_folder(tmp_path):
 # also hold while it grows: it extends downward and scrolls, never jumps or resizes sideways.
 
 SIZES = [(1280, 800), (900, 560), (720, 420)]
-NEW_TAB_BOX = "(({top, width}) => ({top, width}))(document.getElementById('new-tab').getBoundingClientRect())"
+NEW_TAB_BOX = (
+    "(({top, width}) => ({top, width}))(document.getElementById('new-tab').getBoundingClientRect())"
+)
 LONG_LOG = (
     "(() => { const o = document.getElementById('scaffold-output');"
     " o.hidden = false; o.textContent = 'create mode 100644 scripts/x.py\\n'.repeat(200); })()"

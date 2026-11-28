@@ -5,6 +5,7 @@ import { confirmAction } from "./confirm.js";
 import { connect } from "./connection.js";
 import { NewTabDialog } from "./dialog.js";
 import { Productivity } from "./productivity.js";
+import { UsageMeters } from "./usage.js";
 import { ReviewPanel } from "./review.js";
 import { refreshTimes, renderSidebar } from "./sidebar.js";
 import { SidebarWidth } from "./sidebar-width.js";
@@ -108,12 +109,14 @@ const appBar = new AppBar(document.getElementById("app-bar"), {
 });
 
 const productivity = new Productivity();
+const usage = new UsageMeters(document.getElementById("usage"));
 
 const send = connect(onMessage, () => {
   reportErrorsTo(send);
   send({ type: "hello", ...terminals.dimensions() });
   send({ type: "app_status" });
   send({ type: "productivity" });
+  send({ type: "usage" });
 });
 const terminals = new Terminals(document.getElementById("terminals"), {
   send,
@@ -223,6 +226,9 @@ function onMessage(message) {
       productivity.set(message);
       // Each group's heading says its own counts for today.
       render();
+      break;
+    case "usage":
+      usage.set(message);
       break;
     default:
       console.warn("unknown message", message);

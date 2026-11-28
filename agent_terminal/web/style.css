@@ -200,6 +200,70 @@ button {
   font-size: 11px;
 }
 
+/* ---- Claude's plan limits, under the tally ---- */
+
+#usage {
+  display: grid;
+  flex: none;
+  grid-template-columns: auto 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+#usage[hidden] {
+  display: none;
+}
+
+.meter {
+  display: contents;
+}
+
+.meter-name {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.meter-value {
+  min-width: 3ch;
+  text-align: right;
+}
+
+.meter-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-raised);
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+/* Ahead of an even pace: on course to run out before the window ends. */
+.meter[data-pace="ahead"] .meter-fill {
+  background: var(--attention);
+}
+
+.meter[data-pace="near"] .meter-fill {
+  background: var(--failing);
+}
+
+/* Where an even pace would have it: how far through the window the clock is. */
+.meter-pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
+}
+
 #productivity {
   width: min(960px, calc(100vw - 32px));
   max-height: 80vh;

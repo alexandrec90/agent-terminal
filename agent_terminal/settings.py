@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Type "continue" into a Claude tab stopped by its usage limit once the limit resets.
     # Off, the tab still shows when it resets.
     resume_after_limit: bool = True
+    # Where Claude's plan limits are asked for, as Claude Code's `/usage` asks (`usage.py`).
+    usage_url: str = "https://api.anthropic.com/api/oauth/usage"
+    # How often to ask. The weekly meters move slowly; the 5-hour one moves by the minute.
+    usage_poll_seconds: float = 120.0
     # The branch the app's own checkout updates from, on `origin`.
     update_branch: str = "main"
     # How often to ask `origin` whether there is an update. A fetch each time.

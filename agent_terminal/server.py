@@ -23,6 +23,7 @@ from agent_terminal.errors import ErrorLog
 from agent_terminal.host_client import HostSessions
 from agent_terminal.manager import TabManager
 from agent_terminal.productivity import Productivity
+from agent_terminal.usage import Usage
 from agent_terminal.relaunch import launch_relaunch
 from agent_terminal.sessions import LocalSessions
 from agent_terminal.settings import Settings
@@ -106,13 +107,19 @@ class Backend:
             AppOrigin(checkout=checkout),
         )
         self._productivity = Productivity(settings, emit, self._loop)
+        self._usage = Usage(settings, emit, self._loop)
+        handlers = {
+            **self._control.handlers(),
+            **self._productivity.handlers(),
+            **self._usage.handlers(),
+        }
         self._manager = TabManager(
             settings,
             emit,
             self._loop,
             sessions=sessions,
             desktop=desktop or Desktop(),
-            handlers={**self._control.handlers(), **self._productivity.handlers()},
+            handlers=handlers,
         )
         self._socket: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
@@ -187,6 +194,7 @@ class Backend:
             task.cancel()
         self._control.stop()
         self._productivity.stop()
+        self._usage.stop()
         await self._manager.shutdown(keep_processes=self._keep_sessions)
         if self._pump_task is not None:
             self._pump_task.cancel()

@@ -144,8 +144,22 @@ def test_the_captured_reply_gives_the_three_limits():
     [
         ({"kind": "session"}, "5-hour"),
         ({"kind": "weekly_all"}, "Weekly"),
-        ({"kind": "weekly_scoped", "group": "weekly", "scope": {"model": {"display_name": "Fable"}}}, "Fable weekly"),
-        ({"kind": "daily_scoped", "group": "daily", "scope": {"model": {"display_name": "Opus"}}}, "Opus"),
+        (
+            {
+                "kind": "weekly_scoped",
+                "group": "weekly",
+                "scope": {"model": {"display_name": "Fable"}},
+            },
+            "Fable weekly",
+        ),
+        (
+            {
+                "kind": "daily_scoped",
+                "group": "daily",
+                "scope": {"model": {"display_name": "Opus"}},
+            },
+            "Opus",
+        ),
         ({"kind": "weekly_scoped", "scope": None}, "Weekly scoped"),
         ({"kind": "weekly_scoped", "scope": {"model": None}}, "Weekly scoped"),
         ({}, "Limit"),
@@ -175,7 +189,12 @@ def test_a_limit_with_no_reset_has_no_window(resets):
 
 
 def test_a_group_of_unknown_length_has_no_window():
-    entry = {"kind": "x", "group": "monthly", "percent": 1, "resets_at": "2026-12-02T06:00:00+00:00"}
+    entry = {
+        "kind": "x",
+        "group": "monthly",
+        "percent": 1,
+        "resets_at": "2026-12-02T06:00:00+00:00",
+    }
     [limit] = parse_limits(json.dumps({"limits": [entry]}))
     assert limit.resets_at is not None
     assert limit.window_seconds is None

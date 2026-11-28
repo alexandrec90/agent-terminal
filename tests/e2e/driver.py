@@ -282,6 +282,7 @@ class App:
         self.gh_state = base / "fake-gh.json"
         self.gh_log = base / "fake-gh.log"
         self.gh_repos = base / "fake-gh-repos.json"
+        self.usage_reply = base / "usage-reply.json"
         self.devkit = base / "devkit"
         self.port = free_port()
         self.real_agents = real_agents
@@ -306,6 +307,9 @@ class App:
             env["AGENT_TERMINAL_CLAUDE_CONFIG_FILE"] = str(self.claude_config)
             env["AGENT_TERMINAL_GH_COMMAND"] = str(FAKE_GH)
             env["AGENT_TERMINAL_PR_POLL_SECONDS"] = "1"
+            # Never Anthropic's: a file a test writes, read as the endpoint's reply.
+            env["AGENT_TERMINAL_USAGE_URL"] = self.usage_reply.as_uri()
+            env["AGENT_TERMINAL_USAGE_POLL_SECONDS"] = "1"
             env["FAKE_GH_STATE"] = str(self.gh_state)
             env["FAKE_GH_LOG"] = str(self.gh_log)
             env["FAKE_GH_REPOS"] = str(self.gh_repos)

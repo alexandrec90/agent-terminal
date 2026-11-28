@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1328,6 +1328,49 @@ def test_the_tally_counts_today_and_opens_the_graph(tmp_path):
         assert await window.js("document.querySelectorAll('.chart-bar').length") == 2
         await window.click("#productivity-close")
         await window.wait("!document.getElementById('productivity').open", "the graph to close")
+
+    scenario(tmp_path, body)
+
+
+def test_the_usage_meters_mark_the_pace_under_the_tally(tmp_path):
+    async def body(app: App, window: Window) -> None:
+        now = datetime.now(UTC)
+        home = app.base / "claude-home"
+        home.mkdir(exist_ok=True)
+        expires = (now + timedelta(hours=8)).timestamp() * 1000
+        login = {"claudeAiOauth": {"accessToken": "t", "expiresAt": expires}}
+        (home / ".credentials.json").write_text(json.dumps(login), encoding="utf-8")
+        # A day into the week, with more than a day's share of it used.
+        limits = [
+            {"kind": "session", "group": "session", "percent": 4, "resets_at": None},
+            {
+                "kind": "weekly_all",
+                "group": "weekly",
+                "percent": 40,
+                "resets_at": (now + timedelta(days=6)).isoformat(),
+            },
+            {
+                "kind": "weekly_scoped",
+                "group": "weekly",
+                "percent": 0,
+                "resets_at": (now + timedelta(days=6)).isoformat(),
+                "scope": {"model": {"id": None, "display_name": "Fable"}},
+            },
+        ]
+        app.usage_reply.write_text(json.dumps({"limits": limits}), encoding="utf-8")
+        names = "[...document.querySelectorAll('#usage .meter-name')].map((n) => n.textContent)"
+        await window.wait(f"{names}.length === 3", "the usage meters")
+        assert await window.js(names) == ["5-hour", "Weekly", "Fable weekly"]
+        paces = "[...document.querySelectorAll('#usage .meter')].map((n) => n.dataset.pace)"
+        assert await window.js(paces) == ["even", "ahead", "behind"]
+        # A 5-hour window with no reset yet has no mark; the weekly ones are a seventh in.
+        marks = "[...document.querySelectorAll('#usage .meter-pace')].map((n) => n.style.left)"
+        lefts = await window.js(marks)
+        assert len(lefts) == 2
+        assert all(abs(float(left.rstrip("%")) - 100 / 7) < 1 for left in lefts), lefts
+        tally = "document.getElementById('tally').getBoundingClientRect().bottom"
+        meters = "document.getElementById('usage').getBoundingClientRect().top"
+        assert await window.js(f"{meters} >= {tally}")
 
     scenario(tmp_path, body)
 
